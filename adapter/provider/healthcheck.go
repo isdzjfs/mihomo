@@ -212,6 +212,6 @@ func NewHealthCheck(proxies []C.Proxy, url string, timeout uint, interval uint, 
 		interval:       time.Duration(interval) * time.Second,
 		lazy:           lazy,
 		expectedStatus: expectedStatus,
-		singleDo:       singledo.NewSingle[struct{}](time.Duration(timeout) * time.Millisecond),
+		singleDo:       singledo.NewSingle[struct{}](time.Duration(timeout) * time.Millisecond), // keep in sync with test timeout
 	}
 }
