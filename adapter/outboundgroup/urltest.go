@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/callback"
@@ -12,6 +13,7 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/tunnel/statistic"
 )
 
 type urlTestOption func(*URLTest)
@@ -24,6 +26,7 @@ func urlTestWithTolerance(tolerance uint16) urlTestOption {
 
 type URLTest struct {
 	*GroupBase
+	stateMux       sync.RWMutex
 	selected       string
 	testUrl        string
 	expectedStatus string
@@ -53,7 +56,9 @@ func (u *URLTest) Set(name string) error {
 }
 
 func (u *URLTest) ForceSet(name string) {
+	u.stateMux.Lock()
 	u.selected = name
+	u.stateMux.Unlock()
 	u.fastSingle.Reset()
 }
 
@@ -102,29 +107,35 @@ func (u *URLTest) healthCheck() {
 	u.fastSingle.Reset()
 	u.GroupBase.healthCheck()
 	u.fastSingle.Reset()
+	_ = u.fast(false) // preheat: immediately select best node after health check
 }
 
 func (u *URLTest) fast(touch bool) C.Proxy {
 	elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
 		proxies := u.GetProxies(touch)
-		if u.selected != "" {
+		selected, fastNode := u.snapshotState()
+
+		if selected != "" {
 			for _, proxy := range proxies {
 				if !proxy.AliveForTestUrl(u.testUrl) {
 					continue
 				}
-				if proxy.Name() == u.selected {
-					u.fastNode = proxy
+				if proxy.Name() == selected {
+					u.setFastNode(proxy)
 					return proxy, nil
 				}
 			}
 		}
 
-		fast := proxies[0]
-		minDelay := fast.LastDelayForTestUrl(u.testUrl)
-		fastNotExist := true
+		var (
+			fast         C.Proxy
+			fastDelay    uint16
+			hasAliveFast bool
+			fastNotExist = true
+		)
 
-		for _, proxy := range proxies[1:] {
-			if u.fastNode != nil && proxy.Name() == u.fastNode.Name() {
+		for _, proxy := range proxies {
+			if fastNode != nil && proxy.Name() == fastNode.Name() {
 				fastNotExist = false
 			}
 
@@ -133,23 +144,67 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 			}
 
 			delay := proxy.LastDelayForTestUrl(u.testUrl)
-			if delay < minDelay {
+			if !hasAliveFast || delay < fastDelay {
 				fast = proxy
-				minDelay = delay
+				fastDelay = delay
+				hasAliveFast = true
 			}
+		}
 
+		// Do not fall back to timeout nodes when at least one alive node exists.
+		if hasAliveFast {
+			if fastNode == nil || fastNotExist || !fastNode.AliveForTestUrl(u.testUrl) || fastNode.LastDelayForTestUrl(u.testUrl) > fastDelay+u.tolerance {
+				fastNode = fast
+			}
+		} else if fastNode == nil || fastNotExist || !fastNode.AliveForTestUrl(u.testUrl) {
+			fastNode = proxies[0]
+			// all nodes are dead, trigger async health check to recover
+			go u.healthCheck()
 		}
-		// tolerance
-		if u.fastNode == nil || fastNotExist || !u.fastNode.AliveForTestUrl(u.testUrl) || u.fastNode.LastDelayForTestUrl(u.testUrl) > fast.LastDelayForTestUrl(u.testUrl)+u.tolerance {
-			u.fastNode = fast
-		}
-		return u.fastNode, nil
+
+		u.setFastNode(fastNode)
+		return fastNode, nil
 	})
-	if shared && touch { // a shared fastSingle.Do() may cause providers untouched, so we touch them again
+	if shared && touch {
 		u.Touch()
 	}
 
 	return elm
+}
+
+func (u *URLTest) snapshotState() (string, C.Proxy) {
+	u.stateMux.RLock()
+	defer u.stateMux.RUnlock()
+	return u.selected, u.fastNode
+}
+
+func (u *URLTest) getSelected() string {
+	u.stateMux.RLock()
+	defer u.stateMux.RUnlock()
+	return u.selected
+}
+
+func (u *URLTest) setFastNode(proxy C.Proxy) {
+	u.stateMux.Lock()
+	old := u.fastNode
+	u.fastNode = proxy
+	u.stateMux.Unlock()
+
+	// Close connections still using the old (stale) node so they re-dial
+	// through the newly selected node. Only connections that pass through
+	// this URLTest group are affected; direct/other-group connections are not.
+	if old != nil && proxy != nil && old.Name() != proxy.Name() {
+		groupName := u.Name()
+		statistic.DefaultManager.Range(func(c statistic.Tracker) bool {
+			for _, chain := range c.Chains() {
+				if chain == groupName {
+					_ = c.Close()
+					break
+				}
+			}
+			return true
+		})
+	}
 }
 
 // SupportUDP implements C.ProxyAdapter
@@ -177,7 +232,7 @@ func (u *URLTest) MarshalJSON() ([]byte, error) {
 		"all":            all,
 		"testUrl":        u.testUrl,
 		"expectedStatus": u.expectedStatus,
-		"fixed":          u.selected,
+		"fixed":          u.getSelected(),
 		"hidden":         u.Hidden(),
 		"icon":           u.Icon(),
 	})
@@ -192,7 +247,11 @@ func (u *URLTest) Proxies() []C.Proxy {
 }
 
 func (u *URLTest) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (map[string]uint16, error) {
-	return u.GroupBase.URLTest(ctx, u.testUrl, expectedStatus)
+	delays, err := u.GroupBase.URLTest(ctx, u.testUrl, expectedStatus)
+	// URL tests update alive/delay history; reset cache so next routing picks fresh best node.
+	u.fastSingle.Reset()
+	_ = u.fast(false)
+	return delays, err
 }
 
 func parseURLTestOption(config map[string]any) []urlTestOption {
