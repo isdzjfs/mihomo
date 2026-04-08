@@ -129,7 +129,7 @@ func (hc *HealthCheck) check() {
 		id := utils.NewUUIDV4().String()
 		log.Debugln("Start New Health Checking {%s}", id)
 		b := new(errgroup.Group)
-		b.SetLimit(100)
+		b.SetLimit(10)
 
 		// execute default health check
 		option := &extraOption{filters: nil, expectedStatus: hc.expectedStatus}
