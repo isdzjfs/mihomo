@@ -186,20 +186,6 @@ jobs:
     - name: Verify Go env
       run: go env
 
-      # TODO: remove after issue77731 fixed, see: https://github.com/golang/go/issues/77731
-    - name: Fix issue77731 for Golang1.26
-      if: ${{ matrix.jobs.goversion == '' }}
-      run: |
-        cd $(go env GOROOT)
-        patch --verbose -p 1 < $GITHUB_WORKSPACE/.github/patch/issue77731.patch
-
-      # TODO: remove after issue77975 fixed, see: https://github.com/golang/go/issues/77975
-    - name: Fix issue77975 for Golang1.26
-      if: ${{ matrix.jobs.goversion == '' }}
-      run: |
-        cd $(go env GOROOT)
-        patch --verbose -p 1 < $GITHUB_WORKSPACE/.github/patch/issue77975.patch
-
       # TODO: remove after issue77930 fixed, see: https://github.com/golang/go/issues/77930
     - name: Fix issue77930 for Golang1.26
       if: ${{ matrix.jobs.goversion == '' }}
@@ -395,7 +381,7 @@ jobs:
         EOF
 
     - name: Upload Prerelease
-      uses: softprops/action-gh-release@v2
+      uses: softprops/action-gh-release@v3
       if: ${{  success() }}
       with:
         tag_name: Prerelease-${{ github.ref_name }}
@@ -457,7 +443,7 @@ jobs:
         working-directory: bin
   
       - name: Upload Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         if: ${{ success() }}
         with:
           tag_name: ${{ github.event.inputs.version }}

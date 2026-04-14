@@ -98,6 +98,7 @@ type httpConn struct {
 	created   chan struct{}
 	createErr error
 	cancelFn  func()
+	closeFn   func()
 	httputils.NetAddr
 
 	// deadlines
@@ -111,9 +112,6 @@ func (h *httpConn) setUp(body io.ReadCloser, err error) {
 }
 
 func (h *httpConn) waitCreated() error {
-	if h.body != nil || h.createErr != nil {
-		return h.createErr
-	}
 	<-h.created
 	return h.createErr
 }
@@ -128,6 +126,9 @@ func (h *httpConn) Close() error {
 	}
 	if h.cancelFn != nil {
 		h.cancelFn()
+	}
+	if h.closeFn != nil {
+		h.closeFn()
 	}
 	return errors.Join(errorArr...)
 }
