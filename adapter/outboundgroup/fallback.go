@@ -111,11 +111,7 @@ func (f *Fallback) findAliveProxy(touch bool) C.Proxy {
 			if proxy.Name() != selected {
 				continue
 			}
-			if proxy.AliveForTestUrl(f.testUrl) {
-				return proxy
-			}
-			f.clearSelectedIf(selected)
-			break
+			return proxy
 		}
 	}
 
@@ -171,13 +167,7 @@ func (f *Fallback) setSelected(name string) {
 	f.stateMux.Unlock()
 }
 
-func (f *Fallback) clearSelectedIf(selected string) {
-	f.stateMux.Lock()
-	if f.selected == selected {
-		f.selected = ""
-	}
-	f.stateMux.Unlock()
-}
+
 
 func (f *Fallback) Providers() []P.ProxyProvider {
 	return f.providers
