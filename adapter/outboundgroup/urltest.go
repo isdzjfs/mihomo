@@ -117,9 +117,6 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 
 		if selected != "" {
 			for _, proxy := range proxies {
-				if !proxy.AliveForTestUrl(u.testUrl) {
-					continue
-				}
 				if proxy.Name() == selected {
 					u.setFastNode(proxy)
 					return proxy, nil
