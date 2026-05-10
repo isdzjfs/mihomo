@@ -32,21 +32,35 @@ func (f *Fallback) Now() string {
 // DialContext implements C.ProxyAdapter
 func (f *Fallback) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, error) {
 	proxy := f.findAliveProxy(true)
+
+	f.stateMux.RLock()
+	selected := f.selected
+	f.stateMux.RUnlock()
+
+	log.Debugln("Fallback [%s] selected node [%s] (Alive: %t, ManualSelected: %t) for destination [%s]", f.Name(), proxy.Name(), proxy.AliveForTestUrl(f.testUrl), selected != "", metadata.String())
+
 	c, err := proxy.DialContext(ctx, metadata)
 	if err == nil {
 		c.AppendToChains(f)
-	} else {
+	} else if selected == "" {
+		log.Debugln("Fallback [%s] dial node [%s] failed: %v", f.Name(), proxy.Name(), err)
 		f.onDialFailed(proxy.Type(), err, f.healthCheck)
 	}
 
-	if N.NeedHandshake(c) {
+	// Bypass the health tracking wrapper for manually selected nodes
+	// to avoid protocol interference (e.g. VLESS Reality/Vision).
+	bypassWrapper := selected != ""
+	if !bypassWrapper && N.NeedHandshake(c) {
 		c = callback.NewFirstWriteCallBackConn(c, func(err error) {
 			if err == nil {
 				f.onDialSuccess()
 			} else {
+				log.Debugln("Fallback [%s] handshake node [%s] failed: %v", f.Name(), proxy.Name(), err)
 				f.onDialFailed(proxy.Type(), err, f.healthCheck)
 			}
 		})
+	} else if bypassWrapper {
+		log.Debugln("Fallback [%s] bypassing health tracking wrapper for node [%s] (Reason: ManualSelected=%t, Type=%s)", f.Name(), proxy.Name(), selected != "", proxy.Type().String())
 	}
 
 	return c, err
@@ -106,19 +120,21 @@ func (f *Fallback) findAliveProxy(touch bool) C.Proxy {
 	proxies := f.GetProxies(touch)
 	selected := f.getSelected()
 
-	if len(selected) != 0 {
+	if selected != "" {
 		for _, proxy := range proxies {
-			if proxy.Name() != selected {
-				continue
+			if proxy.Name() == selected {
+				log.Debugln("Fallback [%s] using manual selected node [%s]", f.Name(), selected)
+				return proxy
 			}
-			return proxy
 		}
+		log.Debugln("Fallback [%s] manual selected node [%s] not found in proxies, falling back to auto", f.Name(), selected)
 	}
 
 	for _, proxy := range proxies {
 		if proxy.AliveForTestUrl(f.testUrl) {
 			return proxy
 		}
+		log.Debugln("Fallback [%s] skip node [%s] because it's not alive", f.Name(), proxy.Name())
 	}
 
 	// all nodes are dead, trigger async health check to recover
@@ -166,7 +182,6 @@ func (f *Fallback) setSelected(name string) {
 	f.selected = name
 	f.stateMux.Unlock()
 }
-
 
 
 func (f *Fallback) Providers() []P.ProxyProvider {
