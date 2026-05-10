@@ -13,6 +13,7 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 )
 
@@ -65,21 +66,37 @@ func (u *URLTest) ForceSet(name string) {
 // DialContext implements C.ProxyAdapter
 func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Conn, err error) {
 	proxy := u.fast(true)
+
+	u.stateMux.RLock()
+	selected := u.selected
+	u.stateMux.RUnlock()
+
+	log.Debugln("URLTest [%s] selected node [%s] (Alive: %t, ManualSelected: %t) for destination [%s]", u.Name(), proxy.Name(), proxy.AliveForTestUrl(u.testUrl), selected != "", metadata.String())
+
 	c, err = proxy.DialContext(ctx, metadata)
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
-		u.onDialFailed(proxy.Type(), err, u.healthCheck)
+		log.Debugln("URLTest [%s] dial node [%s] failed: %v", u.Name(), proxy.Name(), err)
+		if selected == "" {
+			u.onDialFailed(proxy.Type(), err, u.healthCheck)
+		}
 	}
 
-	if N.NeedHandshake(c) {
+	// Bypass the health tracking wrapper for manually selected nodes
+	// to avoid protocol interference (e.g. VLESS Reality/Vision).
+	bypassWrapper := selected != ""
+	if !bypassWrapper && N.NeedHandshake(c) {
 		c = callback.NewFirstWriteCallBackConn(c, func(err error) {
 			if err == nil {
 				u.onDialSuccess()
 			} else {
+				log.Debugln("URLTest [%s] handshake node [%s] failed: %v", u.Name(), proxy.Name(), err)
 				u.onDialFailed(proxy.Type(), err, u.healthCheck)
 			}
 		})
+	} else if bypassWrapper {
+		log.Debugln("URLTest [%s] bypassing health tracking wrapper for node [%s] (Reason: ManualSelected=%t, Type=%s)", u.Name(), proxy.Name(), selected != "", proxy.Type().String())
 	}
 
 	return c, err
@@ -88,11 +105,19 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 // ListenPacketContext implements C.ProxyAdapter
 func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (C.PacketConn, error) {
 	proxy := u.fast(true)
+
+	u.stateMux.RLock()
+	selected := u.selected
+	u.stateMux.RUnlock()
+
 	pc, err := proxy.ListenPacketContext(ctx, metadata)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
-		u.onDialFailed(proxy.Type(), err, u.healthCheck)
+		log.Debugln("URLTest [%s] ListenPacket node [%s] failed: %v", u.Name(), proxy.Name(), err)
+		if selected == "" {
+			u.onDialFailed(proxy.Type(), err, u.healthCheck)
+		}
 	}
 
 	return pc, err
@@ -118,10 +143,12 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 		if selected != "" {
 			for _, proxy := range proxies {
 				if proxy.Name() == selected {
+					log.Debugln("URLTest [%s] using manual selected node [%s]", u.Name(), selected)
 					u.setFastNode(proxy)
 					return proxy, nil
 				}
 			}
+			log.Debugln("URLTest [%s] manual selected node [%s] not found in proxies, falling back to auto", u.Name(), selected)
 		}
 
 		var (
@@ -137,6 +164,7 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 			}
 
 			if !proxy.AliveForTestUrl(u.testUrl) {
+				log.Debugln("URLTest [%s] skip node [%s] because it's not alive", u.Name(), proxy.Name())
 				continue
 			}
 
