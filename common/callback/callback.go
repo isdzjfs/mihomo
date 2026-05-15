@@ -41,6 +41,16 @@ func (c *firstWriteCallBackConn) WriterReplaceable() bool {
 }
 
 func (c *firstWriteCallBackConn) ReaderReplaceable() bool {
+	// Delegate to the underlying connection to preserve its read-path semantics.
+	// For example, VLESS returns false until its response header has been parsed,
+	// and returning true here unconditionally would cause the relay to bypass that
+	// logic, breaking the protocol.
+	type readerReplaceableConn interface {
+		ReaderReplaceable() bool
+	}
+	if inner, ok := c.Conn.(readerReplaceableConn); ok {
+		return inner.ReaderReplaceable()
+	}
 	return true
 }
 
