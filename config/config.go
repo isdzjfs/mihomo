@@ -48,6 +48,7 @@ type General struct {
 	Mode                    T.TunnelMode            `json:"mode"`
 	UnifiedDelay            bool                    `json:"unified-delay"`
 	LogLevel                log.LogLevel            `json:"log-level"`
+	LogFile                 string                  `json:"log-file"`
 	IPv6                    bool                    `json:"ipv6"`
 	Interface               string                  `json:"interface-name"`
 	RoutingMark             int                     `json:"routing-mark"`
@@ -408,6 +409,7 @@ type RawConfig struct {
 	Mode                    T.TunnelMode            `yaml:"mode" json:"mode"`
 	UnifiedDelay            bool                    `yaml:"unified-delay" json:"unified-delay"`
 	LogLevel                log.LogLevel            `yaml:"log-level" json:"log-level"`
+	LogFile                 string                  `yaml:"log-file" json:"log-file"`
 	IPv6                    bool                    `yaml:"ipv6" json:"ipv6"`
 	ExternalController      string                  `yaml:"external-controller" json:"external-controller"`
 	ExternalControllerPipe  string                  `yaml:"external-controller-pipe" json:"external-controller-pipe"`
@@ -759,6 +761,7 @@ func parseGeneral(cfg *RawConfig) (*General, error) {
 		UnifiedDelay: cfg.UnifiedDelay,
 		Mode:         cfg.Mode,
 		LogLevel:     cfg.LogLevel,
+		LogFile:      cfg.LogFile,
 		IPv6:         cfg.IPv6,
 		Interface:    cfg.Interface,
 		RoutingMark:  cfg.RoutingMark,

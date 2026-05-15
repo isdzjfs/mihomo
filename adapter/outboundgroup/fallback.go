@@ -47,9 +47,12 @@ func (f *Fallback) DialContext(ctx context.Context, metadata *C.Metadata) (C.Con
 		f.onDialFailed(proxy.Type(), err, f.healthCheck)
 	}
 
-	// Bypass the health tracking wrapper for manually selected nodes
-	// to avoid protocol interference (e.g. VLESS Reality/Vision).
-	bypassWrapper := selected != ""
+	// Bypass the health tracking wrapper for manually selected nodes or VLESS nodes.
+	// For VLESS with Vision/Reality flow, WriteBuffer() internally replaces its
+	// ExtendedWriter during the TLS handshake phase. Intercepting the first write
+	// via the wrapper conflicts with this dynamic writer replacement and breaks
+	// the Vision flow protocol.
+	bypassWrapper := selected != "" || proxy.Type() == C.Vless
 	if !bypassWrapper && N.NeedHandshake(c) {
 		c = callback.NewFirstWriteCallBackConn(c, func(err error) {
 			if err == nil {

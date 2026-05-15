@@ -86,6 +86,9 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	mux.Lock()
 	defer mux.Unlock()
 	log.SetLevel(cfg.General.LogLevel)
+	if err := log.SetFileOutput(cfg.General.LogFile); err != nil {
+		log.Warnln("Failed to set log file output: %v", err)
+	}
 
 	tunnel.OnSuspend()
 

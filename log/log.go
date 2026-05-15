@@ -2,6 +2,7 @@ package log
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/metacubex/mihomo/common/observable"
@@ -13,6 +14,9 @@ var (
 	logCh  = make(chan Event)
 	source = observable.NewObservable[Event](logCh)
 	level  = INFO
+
+	logFile     *os.File
+	logFilePath string
 )
 
 func init() {
@@ -77,6 +81,43 @@ func Level() LogLevel {
 
 func SetLevel(newLevel LogLevel) {
 	level = newLevel
+}
+
+// SetFileOutput sets the log file path. If path is empty, file logging is disabled.
+// Logs are written to both stdout and the file simultaneously.
+// If the path changes, the old file is closed and a new one is opened (append mode).
+func SetFileOutput(path string) error {
+	if path == logFilePath {
+		return nil // no change
+	}
+
+	// Close the previous log file if open
+	if logFile != nil {
+		_ = logFile.Close()
+		logFile = nil
+	}
+	logFilePath = path
+
+	if path == "" {
+		// File logging disabled, revert to stdout only
+		log.SetOutput(os.Stdout)
+		return nil
+	}
+
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.SetOutput(os.Stdout)
+		return fmt.Errorf("open log file %s: %w", path, err)
+	}
+	logFile = f
+	// Write to both stdout and the file simultaneously
+	log.SetOutput(io.MultiWriter(os.Stdout, f))
+	return nil
+}
+
+// LogFile returns the current log file path, or empty string if not set.
+func LogFile() string {
+	return logFilePath
 }
 
 func print(data Event) {
