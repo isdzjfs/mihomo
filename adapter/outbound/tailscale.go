@@ -1,4 +1,4 @@
-//go:build !no_tailscale
+//go:build with_gvisor && !no_tailscale
 
 package outbound
 
@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/iface/anet"
@@ -126,7 +125,7 @@ func NewTailscale(option TailscaleOption) (*Tailscale, error) {
 		ControlURL:           option.ControlURL,
 		Ephemeral:            option.Ephemeral,
 		SystemDialer:         outbound.dialer.DialContext,
-		SystemPacketListener: tailscalePacketListener{dialer: outbound.dialer},
+		SystemPacketListener: tailscalePacketListener{dialer: outbound.dialer}.ListenPacket,
 		ExtraRootCAs:         ca.GetCertPool(),
 		LookupHook:           tailscaleLookupHook,
 		UserLogf: func(format string, args ...any) {
@@ -313,13 +312,27 @@ func (t *Tailscale) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
 	if err = t.ensureStarted(ctx); err != nil {
 		return nil, err
 	}
+	netStack, err := t.server.Netstack(ctx)
+	if err != nil {
+		return nil, err
+	}
+	v4, v6 := t.server.TailscaleIPs()
 	options := t.DialOptions()
 	options = append(options, dialer.WithResolver(t.dnsResolver))
 	options = append(options, dialer.WithNetDialer(dialer.NetDialerFunc(func(ctx context.Context, network, address string) (net.Conn, error) {
-		if err = t.checkTailscaleRoute(ctx, network, address); err != nil {
+		dst, err := netip.ParseAddrPort(address) // the dialer will resolve the domain to ip
+		if err != nil {
 			return nil, err
 		}
-		return t.server.Dial(ctx, network, address)
+		src := v4
+		if dst.Addr().Is6() {
+			src = v6
+		}
+		tcpConn, err := netStack.DialContextTCPWithBind(ctx, src, dst)
+		if err != nil {
+			return nil, err
+		}
+		return tcpConn, nil
 	})))
 	var conn net.Conn
 	conn, err = dialer.NewDialer(options...).DialContext(ctx, "tcp", metadata.RemoteAddress())
@@ -339,19 +352,19 @@ func (t *Tailscale) ListenPacketContext(ctx context.Context, metadata *C.Metadat
 	if err = t.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
 	}
-	address := metadata.AddrPort().String()
-	if err = t.checkTailscaleRoute(ctx, "udp", address); err != nil {
-		return nil, err
+	v4, v6 := t.server.TailscaleIPs()
+	src := v4
+	if metadata.DstIP.Is6() {
+		src = v6
 	}
-	conn, err := t.server.Dial(ctx, "udp", address)
+	pc, err := t.server.ListenPacket("udp", net.JoinHostPort(src.String(), "0"))
 	if err != nil {
 		return nil, err
 	}
-	if conn == nil {
-		return nil, errors.New("packet conn is nil")
+	if pc == nil {
+		return nil, errors.New("packetConn is nil")
 	}
-	rAddr := metadata.UDPAddr()
-	return newPacketConn(N.NewThreadSafePacketConn(&tailscaleConnPacketConn{Conn: conn, rAddr: rAddr}), t), nil
+	return newPacketConn(pc, t), nil
 }
 
 func (t *Tailscale) ResolveUDP(ctx context.Context, metadata *C.Metadata) error {
@@ -361,17 +374,6 @@ func (t *Tailscale) ResolveUDP(ctx context.Context, metadata *C.Metadata) error 
 			return fmt.Errorf("can't resolve ip: %w", err)
 		}
 		metadata.DstIP = ip
-	}
-	return nil
-}
-
-func (t *Tailscale) checkTailscaleRoute(ctx context.Context, network, address string) error {
-	ipp, viaTailscale, err := t.server.DialPlan(ctx, network, address)
-	if err != nil {
-		return err
-	}
-	if !viaTailscale {
-		return fmt.Errorf("destination %s is not routed by Tailscale; configure exit-node or accept an advertised subnet route", ipp)
 	}
 	return nil
 }
@@ -438,43 +440,10 @@ func (t *Tailscale) Close() error {
 	return nil
 }
 
-type tailscaleConnPacketConn struct {
-	net.Conn
-	rAddr net.Addr
-}
-
 type tailscalePacketListener struct {
 	dialer C.Dialer
 }
 
 func (l tailscalePacketListener) ListenPacket(ctx context.Context, network, address string) (net.PacketConn, error) {
 	return l.dialer.ListenPacket(ctx, network, address, netip.AddrPort{})
-}
-
-func (c *tailscaleConnPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, err := c.Conn.Read(b)
-	return n, c.rAddr, err
-}
-
-func (c *tailscaleConnPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	return c.Conn.Write(b)
-}
-
-func (c *tailscaleConnPacketConn) LocalAddr() net.Addr {
-	if addr := c.Conn.LocalAddr(); addr != nil {
-		return addr
-	}
-	return &net.UDPAddr{IP: net.IPv4zero, Port: 0}
-}
-
-func (c *tailscaleConnPacketConn) SetDeadline(t time.Time) error {
-	return c.Conn.SetDeadline(t)
-}
-
-func (c *tailscaleConnPacketConn) SetReadDeadline(t time.Time) error {
-	return c.Conn.SetReadDeadline(t)
-}
-
-func (c *tailscaleConnPacketConn) SetWriteDeadline(t time.Time) error {
-	return c.Conn.SetWriteDeadline(t)
 }
