@@ -12,22 +12,6 @@ type firstWriteCallBackConn struct {
 	written  bool
 }
 
-type needHandshakeConn interface {
-	NeedHandshake() bool
-}
-
-type readerReplaceableConn interface {
-	ReaderReplaceable() bool
-}
-
-type writerPossiblyReplaceableConn interface {
-	WriterPossiblyReplaceable() bool
-}
-
-type readerPossiblyReplaceableConn interface {
-	ReaderPossiblyReplaceable() bool
-}
-
 func (c *firstWriteCallBackConn) Write(b []byte) (n int, err error) {
 	defer func() {
 		if !c.written {
@@ -57,41 +41,17 @@ func (c *firstWriteCallBackConn) WriterReplaceable() bool {
 }
 
 func (c *firstWriteCallBackConn) ReaderReplaceable() bool {
+	// Delegate to the underlying connection to preserve its read-path semantics.
+	// For example, VLESS returns false until its response header has been parsed,
+	// and returning true here unconditionally would cause the relay to bypass that
+	// logic, breaking the protocol.
+	type readerReplaceableConn interface {
+		ReaderReplaceable() bool
+	}
 	if inner, ok := c.Conn.(readerReplaceableConn); ok {
 		return inner.ReaderReplaceable()
 	}
 	return true
-}
-
-func (c *firstWriteCallBackConn) NeedHandshake() bool {
-	// Keep the wrapper transparent until the first write, so protocols with
-	// lazy handshakes such as VLESS still expose their handshake state to Relay.
-	if c.written {
-		return false
-	}
-	if inner, ok := c.Conn.(needHandshakeConn); ok {
-		return inner.NeedHandshake()
-	}
-	return false
-}
-
-func (c *firstWriteCallBackConn) WriterPossiblyReplaceable() bool {
-	// VLESS Vision can replace its writer during early writes. Delegating this
-	// signal lets Relay preserve that path while this wrapper observes failures.
-	if c.written {
-		return false
-	}
-	if inner, ok := c.Conn.(writerPossiblyReplaceableConn); ok {
-		return inner.WriterPossiblyReplaceable()
-	}
-	return false
-}
-
-func (c *firstWriteCallBackConn) ReaderPossiblyReplaceable() bool {
-	if inner, ok := c.Conn.(readerPossiblyReplaceableConn); ok {
-		return inner.ReaderPossiblyReplaceable()
-	}
-	return false
 }
 
 var _ N.ExtendedConn = (*firstWriteCallBackConn)(nil)
