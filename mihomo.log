@@ -1,7 +1,0 @@
-time="2026-05-13T13:44:22.997661134+08:00" level=info msg="[TUN] Tun adapter listening at: nikki([198.18.0.1/30],[]), mtu: 9000, auto route: false, auto redir: false, ip stack: Mixed"
-time="2026-05-13T13:44:22.997737431+08:00" level=info msg="Start initial compatible provider Spotify"
-time="2026-05-13T13:44:22.997790298+08:00" level=info msg="Start initial provider 云开见月"
-time="2026-05-13T13:44:22.997841966+08:00" level=info msg="Start initial provider 良心云"
-time="2026-05-13T13:44:22.997891281+08:00" level=info msg="Start initial compatible provider 默认代理"
-time="2026-05-13T13:44:22.997921512+08:00" level=info msg="Start initial compatible provider Microsoft"
-time="2026-05-13T13:44:22.997935558+08:00" level=info msg="Start initial compatible provider default"
