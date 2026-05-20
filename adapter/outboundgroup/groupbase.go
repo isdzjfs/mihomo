@@ -55,34 +55,13 @@ type GroupBaseOption struct {
 }
 
 func NewGroupBase(opt GroupBaseOption) *GroupBase {
-	var excludeTypeArray []string
-	if opt.ExcludeType != "" {
-		excludeTypeArray = strings.Split(opt.ExcludeType, "|")
-	}
-
-	var excludeFilterRegs []*regexp2.Regexp
-	if opt.ExcludeFilter != "" {
-		for _, excludeFilter := range strings.Split(opt.ExcludeFilter, "`") {
-			excludeFilterReg := regexp2.MustCompile(excludeFilter, regexp2.None)
-			excludeFilterRegs = append(excludeFilterRegs, excludeFilterReg)
-		}
-	}
-
-	var filterRegs []*regexp2.Regexp
-	if opt.Filter != "" {
-		for _, filter := range strings.Split(opt.Filter, "`") {
-			filterReg := regexp2.MustCompile(filter, regexp2.None)
-			filterRegs = append(filterRegs, filterReg)
-		}
-	}
-
 	gb := &GroupBase{
 		Base:              outbound.NewBase(outbound.BaseOption{Name: opt.Name, Type: opt.Type}),
 		hidden:            opt.Hidden,
 		icon:              opt.Icon,
-		filterRegs:        filterRegs,
-		excludeFilterRegs: excludeFilterRegs,
-		excludeTypeArray:  excludeTypeArray,
+		filterRegs:        compileProxyNameFilters(opt.Filter),
+		excludeFilterRegs: compileProxyNameFilters(opt.ExcludeFilter),
+		excludeTypeArray:  splitExcludeTypes(opt.ExcludeType),
 		providers:         opt.Providers,
 		failedTesting:     atomic.NewBool(false),
 		testTimeout:       opt.TestTimeout,
@@ -187,35 +166,7 @@ func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
 		proxies = newProxies
 	}
 
-	if len(gb.excludeFilterRegs) > 0 {
-		var newProxies []C.Proxy
-	LOOP1:
-		for _, p := range proxies {
-			name := p.Name()
-			for _, excludeFilterReg := range gb.excludeFilterRegs {
-				if mat, _ := excludeFilterReg.MatchString(name); mat {
-					continue LOOP1
-				}
-			}
-			newProxies = append(newProxies, p)
-		}
-		proxies = newProxies
-	}
-
-	if gb.excludeTypeArray != nil {
-		var newProxies []C.Proxy
-	LOOP2:
-		for _, p := range proxies {
-			mType := p.Type().String()
-			for _, excludeType := range gb.excludeTypeArray {
-				if strings.EqualFold(mType, excludeType) {
-					continue LOOP2
-				}
-			}
-			newProxies = append(newProxies, p)
-		}
-		proxies = newProxies
-	}
+	proxies = filterExcludedProxies(proxies, gb.excludeFilterRegs, gb.excludeTypeArray)
 
 	if len(proxies) == 0 {
 		return []C.Proxy{tunnel.Proxies()["COMPATIBLE"]}
@@ -226,6 +177,64 @@ func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
 	gb.providerProxies = proxies
 
 	return proxies
+}
+
+func compileProxyNameFilters(filter string) []*regexp2.Regexp {
+	if filter == "" {
+		return nil
+	}
+
+	var filters []*regexp2.Regexp
+	for _, expr := range strings.Split(filter, "`") {
+		expr = strings.TrimSpace(expr)
+		if expr == "" {
+			continue
+		}
+		filters = append(filters, regexp2.MustCompile(expr, regexp2.None))
+	}
+	return filters
+}
+
+func splitExcludeTypes(excludeType string) []string {
+	if excludeType == "" {
+		return nil
+	}
+
+	var excludeTypes []string
+	for _, typ := range strings.Split(excludeType, "|") {
+		typ = strings.TrimSpace(typ)
+		if typ != "" {
+			excludeTypes = append(excludeTypes, typ)
+		}
+	}
+	return excludeTypes
+}
+
+func filterExcludedProxies(proxies []C.Proxy, excludeFilterRegs []*regexp2.Regexp, excludeTypeArray []string) []C.Proxy {
+	if len(excludeFilterRegs) == 0 && len(excludeTypeArray) == 0 {
+		return proxies
+	}
+
+	var newProxies []C.Proxy
+LOOP:
+	for _, p := range proxies {
+		name := p.Name()
+		for _, excludeFilterReg := range excludeFilterRegs {
+			if mat, _ := excludeFilterReg.MatchString(name); mat {
+				continue LOOP
+			}
+		}
+
+		mType := p.Type().String()
+		for _, excludeType := range excludeTypeArray {
+			if strings.EqualFold(mType, excludeType) {
+				continue LOOP
+			}
+		}
+
+		newProxies = append(newProxies, p)
+	}
+	return newProxies
 }
 
 func (gb *GroupBase) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (map[string]uint16, error) {
