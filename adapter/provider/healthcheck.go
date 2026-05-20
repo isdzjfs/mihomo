@@ -23,7 +23,19 @@ type HealthCheckOption struct {
 
 type extraOption struct {
 	expectedStatus utils.IntRanges[uint16]
+	filters        []extraFilter
+}
+
+type extraFilter struct {
 	filters        map[string]struct{}
+	excludeFilters map[string]struct{}
+	excludeTypes   []string
+}
+
+type compiledExtraFilter struct {
+	filterReg        *regexp2.Regexp
+	excludeFilterReg *regexp2.Regexp
+	excludeTypes     []string
 }
 
 type HealthCheck struct {
@@ -65,7 +77,7 @@ func (hc *HealthCheck) setProxies(proxies []C.Proxy) {
 	hc.proxies = proxies
 }
 
-func (hc *HealthCheck) registerHealthCheckTask(url string, expectedStatus utils.IntRanges[uint16], filter string, interval uint) {
+func (hc *HealthCheck) registerHealthCheckTask(url string, expectedStatus utils.IntRanges[uint16], filter string, excludeFilter string, excludeType string, interval uint) {
 	url = strings.TrimSpace(url)
 	if len(url) == 0 || url == hc.url {
 		log.Debugln("ignore invalid health check url: %s", url)
@@ -86,30 +98,106 @@ func (hc *HealthCheck) registerHealthCheckTask(url string, expectedStatus utils.
 
 	// prioritize the use of previously registered configurations, especially those from provider
 	if _, ok := hc.extra[url]; ok {
-		// provider default health check does not set filter
-		if url != hc.url && len(filter) != 0 {
-			splitAndAddFiltersToExtra(filter, hc.extra[url])
-		}
+		hc.extra[url].filters = append(hc.extra[url].filters, newExtraFilter(filter, excludeFilter, excludeType))
 
 		log.Debugln("health check url: %s exists", url)
 		return
 	}
 
-	option := &extraOption{filters: map[string]struct{}{}, expectedStatus: expectedStatus}
-	splitAndAddFiltersToExtra(filter, option)
+	option := &extraOption{
+		expectedStatus: expectedStatus,
+		filters:        []extraFilter{newExtraFilter(filter, excludeFilter, excludeType)},
+	}
 	hc.extra[url] = option
 }
 
-func splitAndAddFiltersToExtra(filter string, option *extraOption) {
+func newExtraFilter(filter string, excludeFilter string, excludeType string) extraFilter {
+	option := extraFilter{filters: map[string]struct{}{}, excludeFilters: map[string]struct{}{}}
+	splitAndAddFiltersToExtra(filter, option.filters)
+	splitAndAddFiltersToExtra(excludeFilter, option.excludeFilters)
+	addExcludeTypesToExtra(excludeType, &option)
+	return option
+}
+
+func splitAndAddFiltersToExtra(filter string, filters map[string]struct{}) {
 	filter = strings.TrimSpace(filter)
-	if len(filter) != 0 {
-		for _, regex := range strings.Split(filter, "`") {
-			regex = strings.TrimSpace(regex)
-			if len(regex) != 0 {
-				option.filters[regex] = struct{}{}
-			}
+	if len(filter) == 0 || filters == nil {
+		return
+	}
+
+	for _, regex := range strings.Split(filter, "`") {
+		regex = strings.TrimSpace(regex)
+		if len(regex) != 0 {
+			filters[regex] = struct{}{}
 		}
 	}
+}
+
+func addExcludeTypesToExtra(excludeType string, option *extraFilter) {
+	excludeType = strings.TrimSpace(excludeType)
+	if len(excludeType) == 0 || option == nil {
+		return
+	}
+
+	exists := map[string]struct{}{}
+	for _, typ := range option.excludeTypes {
+		exists[strings.ToLower(typ)] = struct{}{}
+	}
+	for _, typ := range strings.Split(excludeType, "|") {
+		typ = strings.TrimSpace(typ)
+		if typ == "" {
+			continue
+		}
+		key := strings.ToLower(typ)
+		if _, ok := exists[key]; ok {
+			continue
+		}
+		exists[key] = struct{}{}
+		option.excludeTypes = append(option.excludeTypes, typ)
+	}
+}
+
+func compileExtraFilters(filters []extraFilter) []compiledExtraFilter {
+	compiled := make([]compiledExtraFilter, 0, len(filters))
+	for _, filter := range filters {
+		compiled = append(compiled, compiledExtraFilter{
+			filterReg:        compileHealthCheckFilter(filter.filters),
+			excludeFilterReg: compileHealthCheckFilter(filter.excludeFilters),
+			excludeTypes:     filter.excludeTypes,
+		})
+	}
+	return compiled
+}
+
+func compileHealthCheckFilter(filters map[string]struct{}) *regexp2.Regexp {
+	if len(filters) == 0 {
+		return nil
+	}
+
+	expressions := make([]string, 0, len(filters))
+	for filter := range filters {
+		expressions = append(expressions, filter)
+	}
+	return regexp2.MustCompile(strings.Join(expressions, "|"), regexp2.None)
+}
+
+func (filter compiledExtraFilter) match(proxy C.Proxy) bool {
+	if filter.filterReg != nil {
+		if match, _ := filter.filterReg.MatchString(proxy.Name()); !match {
+			return false
+		}
+	}
+	if filter.excludeFilterReg != nil {
+		if match, _ := filter.excludeFilterReg.MatchString(proxy.Name()); match {
+			return false
+		}
+	}
+	for _, excludeType := range filter.excludeTypes {
+		if strings.EqualFold(proxy.Type().String(), excludeType) {
+			return false
+		}
+	}
+	return true
 }
 
 func (hc *HealthCheck) auto() bool {
@@ -154,24 +242,23 @@ func (hc *HealthCheck) execute(b *errgroup.Group, url, uid string, option *extra
 		return
 	}
 
-	var filterReg *regexp2.Regexp
+	var filters []compiledExtraFilter
 	var expectedStatus utils.IntRanges[uint16]
 	if option != nil {
 		expectedStatus = option.expectedStatus
-		if len(option.filters) != 0 {
-			filters := make([]string, 0, len(option.filters))
-			for filter := range option.filters {
-				filters = append(filters, filter)
-			}
-
-			filterReg = regexp2.MustCompile(strings.Join(filters, "|"), regexp2.None)
-		}
+		filters = compileExtraFilters(option.filters)
 	}
 
 	for _, proxy := range hc.proxies {
-		// skip proxies that do not require health check
-		if filterReg != nil {
-			if match, _ := filterReg.MatchString(proxy.Name()); !match {
+		if len(filters) != 0 {
+			matched := false
+			for _, filter := range filters {
+				if filter.match(proxy) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
 				continue
 			}
 		}

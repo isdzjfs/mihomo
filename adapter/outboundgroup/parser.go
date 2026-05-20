@@ -135,7 +135,7 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 				groupOption.URL = C.DefaultTestURL
 			}
 		} else {
-			addTestUrlToProviders(PDs, groupOption.URL, expectedStatus, groupOption.Filter, uint(groupOption.Interval))
+			addTestUrlToProviders(PDs, groupOption.URL, expectedStatus, groupOption.Filter, groupOption.ExcludeFilter, groupOption.ExcludeType, uint(groupOption.Interval))
 		}
 		providers = append(providers, PDs...)
 	}
@@ -145,31 +145,44 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", groupName, err)
 		}
-
-		if _, ok := providersMap[groupName]; ok {
-			return nil, fmt.Errorf("%s: %w", groupName, errDuplicateProvider)
-		}
-
-		if groupOption.URL == "" {
-			groupOption.URL = C.DefaultTestURL
-		}
-
-		// select don't need auto health check
-		if groupOption.Type != "select" && groupOption.Type != "relay" {
-			if groupOption.Interval == 0 {
-				groupOption.Interval = 300
+		// Keep compatible-provider health checks aligned with the group's final proxy list.
+		ps = filterExcludedProxies(ps, compileProxyNameFilters(groupOption.ExcludeFilter), splitExcludeTypes(groupOption.ExcludeType))
+		if len(ps) == 0 {
+			if len(groupOption.Use) == 0 {
+				compatible, ok := proxyMap["COMPATIBLE"]
+				if !ok {
+					return nil, fmt.Errorf("%s: '%s' not found", groupName, "COMPATIBLE")
+				}
+				ps = []C.Proxy{compatible}
 			}
 		}
 
-		hc := provider.NewHealthCheck(ps, groupOption.URL, uint(groupOption.TestTimeout), uint(groupOption.Interval), groupOption.Lazy, expectedStatus)
+		if len(ps) != 0 {
+			if _, ok := providersMap[groupName]; ok {
+				return nil, fmt.Errorf("%s: %w", groupName, errDuplicateProvider)
+			}
 
-		pd, err := provider.NewCompatibleProvider(groupName, ps, hc)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", groupName, err)
+			if groupOption.URL == "" {
+				groupOption.URL = C.DefaultTestURL
+			}
+
+			// select don't need auto health check
+			if groupOption.Type != "select" && groupOption.Type != "relay" {
+				if groupOption.Interval == 0 {
+					groupOption.Interval = 300
+				}
+			}
+
+			hc := provider.NewHealthCheck(ps, groupOption.URL, uint(groupOption.TestTimeout), uint(groupOption.Interval), groupOption.Lazy, expectedStatus)
+
+			pd, err := provider.NewCompatibleProvider(groupName, ps, hc)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", groupName, err)
+			}
+
+			providers = append([]P.ProxyProvider{pd}, providers...)
+			providersMap[groupName] = pd
 		}
-
-		providers = append([]P.ProxyProvider{pd}, providers...)
-		providersMap[groupName] = pd
 	}
 
 	var group C.ProxyAdapter
@@ -221,12 +234,12 @@ func getProviders(mapping map[string]P.ProxyProvider, list []string) ([]P.ProxyP
 	return ps, nil
 }
 
-func addTestUrlToProviders(providers []P.ProxyProvider, url string, expectedStatus utils.IntRanges[uint16], filter string, interval uint) {
+func addTestUrlToProviders(providers []P.ProxyProvider, url string, expectedStatus utils.IntRanges[uint16], filter string, excludeFilter string, excludeType string, interval uint) {
 	if len(providers) == 0 || len(url) == 0 {
 		return
 	}
 
 	for _, pd := range providers {
-		pd.RegisterHealthCheckTask(url, expectedStatus, filter, interval)
+		pd.RegisterHealthCheckTask(url, expectedStatus, filter, excludeFilter, excludeType, interval)
 	}
 }

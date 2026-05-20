@@ -1,0 +1,7 @@
+2026-05-21
+
+- 修正 proxy-group 的 health-check 候选过滤：`include-all`/`use` 场景下注册自动延迟测试时，现在会同步应用 `exclude-filter` 与 `exclude-type`，避免已被组排除的节点仍被后台测速。
+- 抽取组内排除逻辑，确保 `GroupBase.GetProxies()` 与 compatible provider 的 health-check 候选使用同一套排除判断。
+- provider 额外 health-check 对相同 URL 的多组注册按“任务候选并集”执行，避免某个组的 `exclude-type` 误伤另一个同 URL 组的测速候选。
+- 新增针对性测试，覆盖 provider 额外 health-check 任务的名称/类型排除，以及 `include-all` 生成 compatible provider 前的排除过滤。
+- 验证：`rtk go test ./adapter/provider ./adapter/outboundgroup` 通过。
