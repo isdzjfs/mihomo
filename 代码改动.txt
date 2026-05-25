@@ -5,3 +5,9 @@
 - provider 额外 health-check 对相同 URL 的多组注册按“任务候选并集”执行，避免某个组的 `exclude-type` 误伤另一个同 URL 组的测速候选。
 - 新增针对性测试，覆盖 provider 额外 health-check 任务的名称/类型排除，以及 `include-all` 生成 compatible provider 前的排除过滤。
 - 验证：`rtk go test ./adapter/provider ./adapter/outboundgroup` 通过。
+
+2026-05-25
+
+- 调整过期 provider 的启动强制刷新时机：`forceUpdate` 不再在 `pullLoop()` 开头立即执行 `updateWithLog()`，而是先等待一次最小 backoff，让外层 config apply、选组回填和 inner tunnel 状态先落稳。
+- 强制刷新日志移动到实际刷新前打印，并只在延后的首次刷新时触发；正常 interval 与失败 backoff 的重试语义保持不变。
+- 验证：`rtk gofmt -w component/resource/fetcher.go`；`rtk go test ./component/resource` 通过（该包当前无测试文件）。

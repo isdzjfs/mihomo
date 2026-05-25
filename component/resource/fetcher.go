@@ -149,9 +149,11 @@ func (f *Fetcher[V]) pullLoop(forceUpdate bool) {
 		initialInterval = f.interval
 	}
 
+	forceRefresh := forceUpdate
 	if forceUpdate {
-		log.Warnln("[Provider] %s not updated for a long time, force refresh", f.Name())
-		f.updateWithLog()
+		// Let the surrounding config apply finish before a startup refresh uses
+		// the inner tunnel; selected groups may still be patched by the caller.
+		initialInterval = f.backoff.ForAttempt(0)
 	}
 	if attempt := f.backoff.Attempt(); attempt > 0 { // f.Update() was failed, decrease the interval from backoff to achieve fast retry
 		if duration := f.backoff.ForAttempt(attempt); duration < initialInterval {
@@ -164,6 +166,10 @@ func (f *Fetcher[V]) pullLoop(forceUpdate bool) {
 	for {
 		select {
 		case <-timer.C:
+			if forceRefresh {
+				log.Warnln("[Provider] %s not updated for a long time, force refresh", f.Name())
+				forceRefresh = false
+			}
 			f.updateWithLog()
 			interval := f.interval
 			if attempt := f.backoff.Attempt(); attempt > 0 { // f.Update() was failed, decrease the interval from backoff to achieve fast retry
