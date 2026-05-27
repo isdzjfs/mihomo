@@ -79,6 +79,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 	} else {
 		log.Debugln("URLTest [%s] dial node [%s] failed: %v", u.Name(), proxy.Name(), err)
 		if selected == "" {
+			u.fastSingle.Reset()
 			u.onDialFailed(proxy.Type(), err, u.healthCheck)
 		}
 	}
@@ -119,6 +120,7 @@ func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	} else {
 		log.Debugln("URLTest [%s] ListenPacket node [%s] failed: %v", u.Name(), proxy.Name(), err)
 		if selected == "" && proxy.Type() != C.Vless {
+			u.fastSingle.Reset()
 			u.onDialFailed(proxy.Type(), err, u.healthCheck)
 		}
 	}
@@ -155,23 +157,31 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 		}
 
 		var (
-			fast         C.Proxy
-			fastDelay    uint16
-			hasAliveFast bool
-			fastNotExist = true
+			fast             C.Proxy
+			fastDelay        uint16
+			hasAliveFast     bool
+			fastNotExist     = true
+			currentFastAlive bool
+			currentFastDelay uint16
 		)
 
 		for _, proxy := range proxies {
-			if fastNode != nil && proxy.Name() == fastNode.Name() {
+			alive := proxy.AliveForTestUrl(u.testUrl)
+			isCurrentFast := fastNode != nil && proxy.Name() == fastNode.Name()
+			if isCurrentFast {
 				fastNotExist = false
+				currentFastAlive = alive
 			}
 
-			if !proxy.AliveForTestUrl(u.testUrl) {
+			if !alive {
 				log.Debugln("URLTest [%s] skip node [%s] because it's not alive", u.Name(), proxy.Name())
 				continue
 			}
 
 			delay := proxy.LastDelayForTestUrl(u.testUrl)
+			if isCurrentFast {
+				currentFastDelay = delay
+			}
 			if !hasAliveFast || delay < fastDelay {
 				fast = proxy
 				fastDelay = delay
@@ -181,10 +191,10 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 
 		// Do not fall back to timeout nodes when at least one alive node exists.
 		if hasAliveFast {
-			if fastNode == nil || fastNotExist || !fastNode.AliveForTestUrl(u.testUrl) || fastNode.LastDelayForTestUrl(u.testUrl) > fastDelay+u.tolerance {
+			if fastNode == nil || fastNotExist || !currentFastAlive || currentFastDelay > fastDelay+u.tolerance {
 				fastNode = fast
 			}
-		} else if fastNode == nil || fastNotExist || !fastNode.AliveForTestUrl(u.testUrl) {
+		} else if fastNode == nil || fastNotExist || !currentFastAlive {
 			fastNode = proxies[0]
 			// all nodes are dead, trigger async health check to recover
 			go u.healthCheck()

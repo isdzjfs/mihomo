@@ -12,8 +12,10 @@ import (
 )
 
 type parserTestProxy struct {
-	name string
-	typ  C.AdapterType
+	name    string
+	typ     C.AdapterType
+	aliveFn func(string) bool
+	delay   uint16
 }
 
 func (p *parserTestProxy) Name() string { return p.name }
@@ -48,13 +50,23 @@ func (p *parserTestProxy) Close() error { return nil }
 
 func (p *parserTestProxy) Adapter() C.ProxyAdapter { return p }
 
-func (p *parserTestProxy) AliveForTestUrl(string) bool { return true }
+func (p *parserTestProxy) AliveForTestUrl(url string) bool {
+	if p.aliveFn != nil {
+		return p.aliveFn(url)
+	}
+	return true
+}
 
 func (p *parserTestProxy) DelayHistory() []C.DelayHistory { return nil }
 
 func (p *parserTestProxy) ExtraDelayHistories() map[string]C.ProxyState { return nil }
 
-func (p *parserTestProxy) LastDelayForTestUrl(string) uint16 { return 1 }
+func (p *parserTestProxy) LastDelayForTestUrl(string) uint16 {
+	if p.delay != 0 {
+		return p.delay
+	}
+	return 1
+}
 
 func (p *parserTestProxy) URLTest(context.Context, string, utils.IntRanges[uint16]) (uint16, error) {
 	return 1, nil

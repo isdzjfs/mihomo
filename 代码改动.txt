@@ -11,3 +11,10 @@
 - 调整过期 provider 的启动强制刷新时机：`forceUpdate` 不再在 `pullLoop()` 开头立即执行 `updateWithLog()`，而是先等待一次最小 backoff，让外层 config apply、选组回填和 inner tunnel 状态先落稳。
 - 强制刷新日志移动到实际刷新前打印，并只在延后的首次刷新时触发；正常 interval 与失败 backoff 的重试语义保持不变。
 - 验证：`rtk gofmt -w component/resource/fetcher.go`；`rtk go test ./component/resource` 通过（该包当前无测试文件）。
+
+2026-05-27
+
+- 修正 `url-test` 自动选择在节点存活状态异步刷新时可能保留失效当前节点的问题：`fast()` 现在在同一轮扫描内固定当前节点的 alive/delay 快照，避免扫描阶段已判定 not alive 的节点因后续重复读取状态翻转而继续被选中。
+- 自动模式下 `DialContext` / `ListenPacketContext` 拨号失败时立即重置 `fastSingle` 缓存，避免后续连接在 health-check 触发期间继续复用已失败的旧选择。
+- 新增回归测试，覆盖当前 `fastNode` 在扫描时不可用、后续 alive 状态翻转时仍应切换到其他可用节点的场景。
+- 验证：`rtk gofmt -w adapter/outboundgroup/urltest.go adapter/outboundgroup/parser_test.go adapter/outboundgroup/urltest_test.go`；`rtk go test ./adapter/outboundgroup` 通过；`rtk go test ./adapter/...` 通过。
