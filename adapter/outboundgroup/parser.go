@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dlclark/regexp2"
-
 	"github.com/metacubex/mihomo/adapter/provider"
 	"github.com/metacubex/mihomo/common/structure"
 	"github.com/metacubex/mihomo/common/utils"
@@ -69,6 +67,14 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 	}
 
 	groupName := groupOption.Name
+	filterRegs, err := compileProxyNameFilters(groupOption.Filter)
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid filter regex: %w", groupName, err)
+	}
+	excludeFilterRegs, err := compileProxyNameFilters(groupOption.ExcludeFilter)
+	if err != nil {
+		return nil, fmt.Errorf("%s: invalid exclude-filter regex: %w", groupName, err)
+	}
 
 	providers := []P.ProxyProvider{}
 
@@ -82,11 +88,6 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 	}
 	if groupOption.IncludeAllProxies {
 		if groupOption.Filter != "" {
-			var filterRegs []*regexp2.Regexp
-			for _, filter := range strings.Split(groupOption.Filter, "`") {
-				filterReg := regexp2.MustCompile(filter, regexp2.None)
-				filterRegs = append(filterRegs, filterReg)
-			}
 			for _, p := range AllProxies {
 				for _, filterReg := range filterRegs {
 					if mat, _ := filterReg.MatchString(p); mat {
@@ -146,7 +147,7 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 			return nil, fmt.Errorf("%s: %w", groupName, err)
 		}
 		// Keep compatible-provider health checks aligned with the group's final proxy list.
-		ps = filterExcludedProxies(ps, compileProxyNameFilters(groupOption.ExcludeFilter), splitExcludeTypes(groupOption.ExcludeType))
+		ps = filterExcludedProxies(ps, excludeFilterRegs, splitExcludeTypes(groupOption.ExcludeType))
 		if len(ps) == 0 {
 			if len(groupOption.Use) == 0 {
 				compatible, ok := proxyMap["COMPATIBLE"]
@@ -189,11 +190,11 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 	switch groupOption.Type {
 	case "url-test":
 		opts := parseURLTestOption(config)
-		group = NewURLTest(groupOption, providers, opts...)
+		group, err = NewURLTest(groupOption, providers, opts...)
 	case "select":
-		group = NewSelector(groupOption, providers)
+		group, err = NewSelector(groupOption, providers)
 	case "fallback":
-		group = NewFallback(groupOption, providers)
+		group, err = NewFallback(groupOption, providers)
 	case "load-balance":
 		strategy := parseStrategy(config)
 		return NewLoadBalance(groupOption, providers, strategy)
@@ -201,6 +202,9 @@ func ParseProxyGroup(config map[string]any, proxyMap map[string]C.Proxy, provide
 		return nil, fmt.Errorf("%w: The group [%s] with relay type was removed, please using dialer-proxy instead", errType, groupName)
 	default:
 		return nil, fmt.Errorf("%w: %s", errType, groupOption.Type)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", groupName, err)
 	}
 
 	return group, nil

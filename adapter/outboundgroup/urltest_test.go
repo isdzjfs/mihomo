@@ -66,13 +66,16 @@ func TestURLTestDoesNotKeepCurrentNodeWhenAliveStateFlapsAfterScan(t *testing.T)
 		delay: 50,
 	}
 
-	group := NewURLTest(
+	group, err := NewURLTest(
 		&GroupCommonOption{Name: "auto", URL: testURL},
 		[]P.ProxyProvider{&urlTestProvider{
 			name:    "provider",
 			proxies: []C.Proxy{deadA, flappingB, aliveC},
 		}},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	group.fastNode = flappingB
 
 	got := group.fast(false)

@@ -192,7 +192,6 @@ func TestInboundMieru(t *testing.T) {
 }
 
 func testInboundMieruTCP(t *testing.T, handshakeMode string) {
-	t.Parallel()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if !assert.NoError(t, err) {
 		return
@@ -249,7 +248,6 @@ func testInboundMieruTCP(t *testing.T, handshakeMode string) {
 }
 
 func testInboundMieruUDP(t *testing.T, handshakeMode string) {
-	t.Parallel()
 	l, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if !assert.NoError(t, err) {
 		return

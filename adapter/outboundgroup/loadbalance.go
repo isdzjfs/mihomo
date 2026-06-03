@@ -261,19 +261,24 @@ func NewLoadBalance(option *GroupCommonOption, providers []P.ProxyProvider, stra
 	default:
 		return nil, fmt.Errorf("%w: %s", errStrategy, strategy)
 	}
+	groupBase, err := NewGroupBase(GroupBaseOption{
+		Name:           option.Name,
+		Type:           C.LoadBalance,
+		Hidden:         option.Hidden,
+		Icon:           option.Icon,
+		Filter:         option.Filter,
+		ExcludeFilter:  option.ExcludeFilter,
+		ExcludeType:    option.ExcludeType,
+		TestTimeout:    option.TestTimeout,
+		MaxFailedTimes: option.MaxFailedTimes,
+		Providers:      providers,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &LoadBalance{
-		GroupBase: NewGroupBase(GroupBaseOption{
-			Name:           option.Name,
-			Type:           C.LoadBalance,
-			Hidden:         option.Hidden,
-			Icon:           option.Icon,
-			Filter:         option.Filter,
-			ExcludeFilter:  option.ExcludeFilter,
-			ExcludeType:    option.ExcludeType,
-			TestTimeout:    option.TestTimeout,
-			MaxFailedTimes: option.MaxFailedTimes,
-			Providers:      providers,
-		}),
+		GroupBase:      groupBase,
 		strategyFn:     strategyFn,
 		disableUDP:     option.DisableUDP,
 		testUrl:        option.URL,

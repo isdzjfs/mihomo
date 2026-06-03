@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/metacubex/mihomo/common/utils"
@@ -16,6 +17,29 @@ type parserTestProxy struct {
 	typ     C.AdapterType
 	aliveFn func(string) bool
 	delay   uint16
+}
+
+func TestParseProxyGroupReturnsErrorForInvalidRegex(t *testing.T) {
+	proxyMap := map[string]C.Proxy{
+		"COMPATIBLE": &parserTestProxy{name: "COMPATIBLE", typ: C.Compatible},
+		"A":          &parserTestProxy{name: "A", typ: C.Socks5},
+	}
+
+	_, err := ParseProxyGroup(
+		map[string]any{
+			"name":        "auto",
+			"type":        "url-test",
+			"include-all": true,
+			"filter":      "(",
+		},
+		proxyMap,
+		map[string]P.ProxyProvider{},
+		[]string{"A"},
+		nil,
+	)
+	if err == nil || !strings.Contains(err.Error(), "invalid filter regex") {
+		t.Fatalf("expected invalid filter regex error, got %v", err)
+	}
 }
 
 func (p *parserTestProxy) Name() string { return p.name }

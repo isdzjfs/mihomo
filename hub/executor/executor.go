@@ -101,8 +101,8 @@ func ApplyConfig(cfg *config.Config, force bool) {
 
 	updateExperimental(cfg.Experimental)
 	updateUsers(cfg.Users)
-	updateProxies(cfg.Proxies, cfg.Providers)
-	updateRules(cfg.Rules, cfg.SubRules, cfg.RuleProviders)
+	oldProxies, oldProviders := updateProxies(cfg.Proxies, cfg.Providers)
+	oldRuleProviders := updateRules(cfg.Rules, cfg.SubRules, cfg.RuleProviders)
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
@@ -119,6 +119,9 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	loadProvider(cfg.Providers)
 	updateProfile(cfg)
 	loadProvider(cfg.RuleProviders)
+	closeReplacedProviders(oldProviders, cfg.Providers)
+	closeReplacedProviders(oldRuleProviders, cfg.RuleProviders)
+	closeReplacedProxies(oldProxies, cfg.Proxies)
 	runtime.GC()
 	tunnel.OnRunning()
 	updateUpdater(cfg)
@@ -309,12 +312,47 @@ func updateHosts(tree *trie.DomainTrie[resolver.HostValue]) {
 	resolver.DefaultHosts = resolver.NewHosts(tree)
 }
 
-func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) {
-	tunnel.UpdateProxies(proxies, providers)
+func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) (map[string]C.Proxy, map[string]P.ProxyProvider) {
+	return tunnel.UpdateProxies(proxies, providers)
 }
 
-func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {
-	tunnel.UpdateRules(rules, subRules, ruleProviders)
+func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) map[string]P.RuleProvider {
+	return tunnel.UpdateRules(rules, subRules, ruleProviders)
+}
+
+type closeableProvider interface {
+	Close() error
+}
+
+func closeReplacedProviders[T P.Provider](oldProviders map[string]T, currentProviders map[string]T) {
+	for name, oldProvider := range oldProviders {
+		if currentProvider, ok := currentProviders[name]; ok {
+			var oldProviderInterface P.Provider = oldProvider
+			var currentProviderInterface P.Provider = currentProvider
+			if oldProviderInterface == currentProviderInterface {
+				continue
+			}
+		}
+
+		closer, ok := any(oldProvider).(closeableProvider)
+		if !ok {
+			continue
+		}
+		if err := closer.Close(); err != nil {
+			log.Warnln("close provider %s failed: %v", oldProvider.Name(), err)
+		}
+	}
+}
+
+func closeReplacedProxies(oldProxies map[string]C.Proxy, currentProxies map[string]C.Proxy) {
+	for name, oldProxy := range oldProxies {
+		if currentProxy, ok := currentProxies[name]; ok && oldProxy == currentProxy {
+			continue
+		}
+		if err := oldProxy.Close(); err != nil {
+			log.Warnln("close proxy %s failed: %v", oldProxy.Name(), err)
+		}
+	}
 }
 
 func loadProvider[T P.Provider](providers map[string]T) {

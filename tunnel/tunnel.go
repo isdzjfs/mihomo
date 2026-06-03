@@ -55,7 +55,7 @@ var (
 	udpInOnce sync.Once
 
 	// Outbound Rule
-	mode = Rule
+	mode = atomic.NewInt32Enum(Rule)
 
 	// default timeout for UDP session
 	udpTimeout = 60 * time.Second
@@ -115,15 +115,15 @@ func (t tunnel) NatTable() C.NatTable {
 }
 
 func (t tunnel) Proxies() map[string]C.Proxy {
-	return proxies
+	return Proxies()
 }
 
 func (t tunnel) Providers() map[string]P.ProxyProvider {
-	return providers
+	return Providers()
 }
 
 func (t tunnel) RuleProviders() map[string]P.RuleProvider {
-	return ruleProviders
+	return RuleProviders()
 }
 
 func (t tunnel) RuleUpdateCallback() *utils.Callback[P.RuleProvider] {
@@ -193,43 +193,58 @@ func NatTable() C.NatTable {
 
 // Rules return all rules
 func Rules() []C.Rule {
-	return rules
+	configMux.RLock()
+	defer configMux.RUnlock()
+	return append([]C.Rule(nil), rules...)
 }
 
 func Listeners() map[string]C.InboundListener {
-	return listeners
+	configMux.RLock()
+	defer configMux.RUnlock()
+	return cloneMap(listeners)
 }
 
 // UpdateRules handle update rules
-func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[string]P.RuleProvider) {
+func UpdateRules(newRules []C.Rule, newSubRule map[string][]C.Rule, rp map[string]P.RuleProvider) (oldRuleProviders map[string]P.RuleProvider) {
 	configMux.Lock()
+	oldRuleProviders = ruleProviders
 	rules = newRules
 	ruleProviders = rp
 	subRules = newSubRule
 	configMux.Unlock()
+	return
 }
 
 // Proxies return all proxies
 func Proxies() map[string]C.Proxy {
-	return proxies
+	configMux.RLock()
+	defer configMux.RUnlock()
+	return cloneMap(proxies)
 }
 
 // Providers return all compatible providers
 func Providers() map[string]P.ProxyProvider {
-	return providers
+	configMux.RLock()
+	defer configMux.RUnlock()
+	return cloneMap(providers)
 }
 
 // RuleProviders return all loaded rule providers
 func RuleProviders() map[string]P.RuleProvider {
-	return ruleProviders
+	configMux.RLock()
+	defer configMux.RUnlock()
+	return cloneMap(ruleProviders)
 }
 
 // UpdateProxies handle update proxies
-func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]P.ProxyProvider) {
+func UpdateProxies(newProxies map[string]C.Proxy, newProviders map[string]P.ProxyProvider) (oldProxies map[string]C.Proxy, oldProviders map[string]P.ProxyProvider) {
 	configMux.Lock()
+	oldProxies = proxies
+	oldProviders = providers
 	proxies = newProxies
 	providers = newProviders
 	configMux.Unlock()
+	return
 }
 
 func UpdateListeners(newListeners map[string]C.InboundListener) {
@@ -247,12 +262,12 @@ func UpdateSniffer(dispatcher *sniffer.Dispatcher) {
 
 // Mode return current mode
 func Mode() TunnelMode {
-	return mode
+	return mode.Load()
 }
 
 // SetMode change the mode of tunnel
 func SetMode(m TunnelMode) {
-	mode = m
+	mode.Store(m)
 }
 
 func FindProcessMode() process.FindProcessMode {
@@ -315,7 +330,9 @@ func preHandleMetadata(metadata *C.Metadata) error {
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
 	if metadata.SpecialProxy != "" {
 		var exist bool
+		configMux.RLock()
 		proxy, exist = proxies[metadata.SpecialProxy]
+		configMux.RUnlock()
 		if !exist {
 			err = fmt.Errorf("proxy %s not found", metadata.SpecialProxy)
 		}
@@ -384,11 +401,15 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		helper.FindProcess = nil
 	}
 
-	switch mode {
+	switch Mode() {
 	case Direct:
+		configMux.RLock()
 		proxy = proxies["DIRECT"]
+		configMux.RUnlock()
 	case Global:
+		configMux.RLock()
 		proxy = proxies["GLOBAL"]
+		configMux.RUnlock()
 	// Rule
 	default:
 		proxy, rule, err = match(metadata, helper)
@@ -628,13 +649,24 @@ func logMetadata(metadata *C.Metadata, rule C.Rule, remoteConn C.Connection) {
 		} else {
 			log.Infoln("[%s] %s --> %s match %s using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), rule.RuleType().String(), remoteConn.Chains().String())
 		}
-	case mode == Global:
+	case Mode() == Global:
 		log.Infoln("[%s] %s --> %s using GLOBAL", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress())
-	case mode == Direct:
+	case Mode() == Direct:
 		log.Infoln("[%s] %s --> %s using DIRECT", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress())
 	default:
 		log.Infoln("[%s] %s --> %s doesn't match any rule using %s", strings.ToUpper(metadata.NetWork.String()), metadata.SourceDetail(), metadata.RemoteAddress(), remoteConn.Chains().String())
 	}
+}
+
+func cloneMap[K comparable, V any](src map[K]V) map[K]V {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[K]V, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {

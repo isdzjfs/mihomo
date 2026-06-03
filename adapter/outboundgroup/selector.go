@@ -114,22 +114,27 @@ func (s *Selector) Proxies() []C.Proxy {
 	return s.GetProxies(false)
 }
 
-func NewSelector(option *GroupCommonOption, providers []P.ProxyProvider) *Selector {
+func NewSelector(option *GroupCommonOption, providers []P.ProxyProvider) (*Selector, error) {
+	groupBase, err := NewGroupBase(GroupBaseOption{
+		Name:           option.Name,
+		Type:           C.Selector,
+		Hidden:         option.Hidden,
+		Icon:           option.Icon,
+		Filter:         option.Filter,
+		ExcludeFilter:  option.ExcludeFilter,
+		ExcludeType:    option.ExcludeType,
+		TestTimeout:    option.TestTimeout,
+		MaxFailedTimes: option.MaxFailedTimes,
+		Providers:      providers,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &Selector{
-		GroupBase: NewGroupBase(GroupBaseOption{
-			Name:           option.Name,
-			Type:           C.Selector,
-			Hidden:         option.Hidden,
-			Icon:           option.Icon,
-			Filter:         option.Filter,
-			ExcludeFilter:  option.ExcludeFilter,
-			ExcludeType:    option.ExcludeType,
-			TestTimeout:    option.TestTimeout,
-			MaxFailedTimes: option.MaxFailedTimes,
-			Providers:      providers,
-		}),
+		GroupBase:  groupBase,
 		selected:   "COMPATIBLE",
 		disableUDP: option.DisableUDP,
 		testUrl:    option.URL,
-	}
+	}, nil
 }

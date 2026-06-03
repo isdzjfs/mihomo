@@ -54,14 +54,15 @@ type HealthCheck struct {
 }
 
 func (hc *HealthCheck) process() {
-	ticker := time.NewTicker(hc.interval)
+	interval := hc.autoInterval()
+	ticker := time.NewTicker(interval)
 	go hc.check()
 	for {
 		select {
 		case <-ticker.C:
 			lastTouch := hc.lastTouch.Load()
 			since := time.Since(lastTouch)
-			if !hc.lazy || since < hc.interval {
+			if !hc.lazy || since < interval {
 				hc.check()
 			} else {
 				log.Debugln("Skip once health check because we are lazy")
@@ -74,7 +75,9 @@ func (hc *HealthCheck) process() {
 }
 
 func (hc *HealthCheck) setProxies(proxies []C.Proxy) {
-	hc.proxies = proxies
+	hc.mu.Lock()
+	hc.proxies = append([]C.Proxy(nil), proxies...)
+	hc.mu.Unlock()
 }
 
 func (hc *HealthCheck) registerHealthCheckTask(url string, expectedStatus utils.IntRanges[uint16], filter string, excludeFilter string, excludeType string, interval uint) {
@@ -201,7 +204,13 @@ func (filter compiledExtraFilter) match(proxy C.Proxy) bool {
 }
 
 func (hc *HealthCheck) auto() bool {
-	return hc.interval != 0
+	return hc.autoInterval() != 0
+}
+
+func (hc *HealthCheck) autoInterval() time.Duration {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	return hc.interval
 }
 
 func (hc *HealthCheck) touch() {
@@ -209,7 +218,8 @@ func (hc *HealthCheck) touch() {
 }
 
 func (hc *HealthCheck) check() {
-	if len(hc.proxies) == 0 {
+	proxies, extra := hc.snapshot()
+	if len(proxies) == 0 {
 		return
 	}
 
@@ -221,13 +231,11 @@ func (hc *HealthCheck) check() {
 
 		// execute default health check
 		option := &extraOption{filters: nil, expectedStatus: hc.expectedStatus}
-		hc.execute(b, hc.url, id, option)
+		hc.execute(b, proxies, hc.url, id, option)
 
 		// execute extra health check
-		if len(hc.extra) != 0 {
-			for url, option := range hc.extra {
-				hc.execute(b, url, id, option)
-			}
+		for url, option := range extra {
+			hc.execute(b, proxies, url, id, option)
 		}
 		_ = b.Wait()
 		log.Debugln("Finish A Health Checking {%s}", id)
@@ -235,7 +243,27 @@ func (hc *HealthCheck) check() {
 	})
 }
 
-func (hc *HealthCheck) execute(b *errgroup.Group, url, uid string, option *extraOption) {
+func (hc *HealthCheck) snapshot() ([]C.Proxy, map[string]*extraOption) {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+
+	proxies := append([]C.Proxy(nil), hc.proxies...)
+	extra := make(map[string]*extraOption, len(hc.extra))
+	for url, option := range hc.extra {
+		if option == nil {
+			extra[url] = nil
+			continue
+		}
+		copied := &extraOption{
+			expectedStatus: option.expectedStatus,
+			filters:        append([]extraFilter(nil), option.filters...),
+		}
+		extra[url] = copied
+	}
+	return proxies, extra
+}
+
+func (hc *HealthCheck) execute(b *errgroup.Group, proxies []C.Proxy, url, uid string, option *extraOption) {
 	url = strings.TrimSpace(url)
 	if len(url) == 0 {
 		log.Debugln("Health Check has been skipped due to testUrl is empty, {%s}", uid)
@@ -249,7 +277,7 @@ func (hc *HealthCheck) execute(b *errgroup.Group, url, uid string, option *extra
 		filters = compileExtraFilters(option.filters)
 	}
 
-	for _, proxy := range hc.proxies {
+	for _, proxy := range proxies {
 		if len(filters) != 0 {
 			matched := false
 			for _, filter := range filters {

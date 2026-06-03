@@ -54,13 +54,22 @@ type GroupBaseOption struct {
 	Providers      []P.ProxyProvider
 }
 
-func NewGroupBase(opt GroupBaseOption) *GroupBase {
+func NewGroupBase(opt GroupBaseOption) (*GroupBase, error) {
+	filterRegs, err := compileProxyNameFilters(opt.Filter)
+	if err != nil {
+		return nil, fmt.Errorf("invalid filter regex: %w", err)
+	}
+	excludeFilterRegs, err := compileProxyNameFilters(opt.ExcludeFilter)
+	if err != nil {
+		return nil, fmt.Errorf("invalid exclude-filter regex: %w", err)
+	}
+
 	gb := &GroupBase{
 		Base:              outbound.NewBase(outbound.BaseOption{Name: opt.Name, Type: opt.Type}),
 		hidden:            opt.Hidden,
 		icon:              opt.Icon,
-		filterRegs:        compileProxyNameFilters(opt.Filter),
-		excludeFilterRegs: compileProxyNameFilters(opt.ExcludeFilter),
+		filterRegs:        filterRegs,
+		excludeFilterRegs: excludeFilterRegs,
 		excludeTypeArray:  splitExcludeTypes(opt.ExcludeType),
 		providers:         opt.Providers,
 		failedTesting:     atomic.NewBool(false),
@@ -75,7 +84,7 @@ func NewGroupBase(opt GroupBaseOption) *GroupBase {
 		gb.maxFailedTimes = 5
 	}
 
-	return gb
+	return gb, nil
 }
 
 func (gb *GroupBase) Hidden() bool {
@@ -179,9 +188,9 @@ func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
 	return proxies
 }
 
-func compileProxyNameFilters(filter string) []*regexp2.Regexp {
+func compileProxyNameFilters(filter string) ([]*regexp2.Regexp, error) {
 	if filter == "" {
-		return nil
+		return nil, nil
 	}
 
 	var filters []*regexp2.Regexp
@@ -190,9 +199,13 @@ func compileProxyNameFilters(filter string) []*regexp2.Regexp {
 		if expr == "" {
 			continue
 		}
-		filters = append(filters, regexp2.MustCompile(expr, regexp2.None))
+		filterReg, err := regexp2.Compile(expr, regexp2.None)
+		if err != nil {
+			return nil, err
+		}
+		filters = append(filters, filterReg)
 	}
-	return filters
+	return filters, nil
 }
 
 func splitExcludeTypes(excludeType string) []string {

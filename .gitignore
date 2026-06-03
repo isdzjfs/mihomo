@@ -26,3 +26,5 @@ test/config/cache*
 /output
 .vscode/
 .fleet/
+UNFIXED_BUGS_ANALYSIS.md
+VERIFIED_BUG_SEVERITY_ANALYSIS.md

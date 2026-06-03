@@ -186,7 +186,6 @@ func (f *Fallback) setSelected(name string) {
 	f.stateMux.Unlock()
 }
 
-
 func (f *Fallback) Providers() []P.ProxyProvider {
 	return f.providers
 }
@@ -195,22 +194,27 @@ func (f *Fallback) Proxies() []C.Proxy {
 	return f.GetProxies(false)
 }
 
-func NewFallback(option *GroupCommonOption, providers []P.ProxyProvider) *Fallback {
+func NewFallback(option *GroupCommonOption, providers []P.ProxyProvider) (*Fallback, error) {
+	groupBase, err := NewGroupBase(GroupBaseOption{
+		Name:           option.Name,
+		Type:           C.Fallback,
+		Hidden:         option.Hidden,
+		Icon:           option.Icon,
+		Filter:         option.Filter,
+		ExcludeFilter:  option.ExcludeFilter,
+		ExcludeType:    option.ExcludeType,
+		TestTimeout:    option.TestTimeout,
+		MaxFailedTimes: option.MaxFailedTimes,
+		Providers:      providers,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &Fallback{
-		GroupBase: NewGroupBase(GroupBaseOption{
-			Name:           option.Name,
-			Type:           C.Fallback,
-			Hidden:         option.Hidden,
-			Icon:           option.Icon,
-			Filter:         option.Filter,
-			ExcludeFilter:  option.ExcludeFilter,
-			ExcludeType:    option.ExcludeType,
-			TestTimeout:    option.TestTimeout,
-			MaxFailedTimes: option.MaxFailedTimes,
-			Providers:      providers,
-		}),
+		GroupBase:      groupBase,
 		disableUDP:     option.DisableUDP,
 		testUrl:        option.URL,
 		expectedStatus: option.ExpectedStatus,
-	}
+	}, nil
 }

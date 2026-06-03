@@ -112,6 +112,12 @@ func (bp *baseProvider) setProxies(proxies []C.Proxy) {
 
 func (bp *baseProvider) Close() error {
 	bp.healthCheck.close()
+	bp.mutex.RLock()
+	proxies := append([]C.Proxy(nil), bp.proxies...)
+	bp.mutex.RUnlock()
+	for _, proxy := range proxies {
+		_ = proxy.Close()
+	}
 	return nil
 }
 

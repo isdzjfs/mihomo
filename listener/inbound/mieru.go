@@ -20,9 +20,10 @@ import (
 
 type Mieru struct {
 	*Base
-	option *MieruOption
-	server mieruserver.Server
-	mu     sync.Mutex
+	option    *MieruOption
+	server    mieruserver.Server
+	mu        sync.Mutex
+	accepting bool
 }
 
 type MieruOption struct {
@@ -78,6 +79,10 @@ func (m *Mieru) Listen(tunnel C.Tunnel) error {
 			return fmt.Errorf("failed to start mieru server: %w", err)
 		}
 	}
+	if m.accepting {
+		return nil
+	}
+	m.accepting = true
 
 	additions := m.config.Additions()
 	if len(additions) == 0 {
@@ -88,6 +93,11 @@ func (m *Mieru) Listen(tunnel C.Tunnel) error {
 	}
 
 	go func() {
+		defer func() {
+			m.mu.Lock()
+			m.accepting = false
+			m.mu.Unlock()
+		}()
 		for {
 			c, req, err := m.server.Accept()
 			if err != nil {

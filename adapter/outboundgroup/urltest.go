@@ -305,20 +305,25 @@ func parseURLTestOption(config map[string]any) []urlTestOption {
 	return opts
 }
 
-func NewURLTest(option *GroupCommonOption, providers []P.ProxyProvider, options ...urlTestOption) *URLTest {
+func NewURLTest(option *GroupCommonOption, providers []P.ProxyProvider, options ...urlTestOption) (*URLTest, error) {
+	groupBase, err := NewGroupBase(GroupBaseOption{
+		Name:           option.Name,
+		Type:           C.URLTest,
+		Hidden:         option.Hidden,
+		Icon:           option.Icon,
+		Filter:         option.Filter,
+		ExcludeFilter:  option.ExcludeFilter,
+		ExcludeType:    option.ExcludeType,
+		TestTimeout:    option.TestTimeout,
+		MaxFailedTimes: option.MaxFailedTimes,
+		Providers:      providers,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	urlTest := &URLTest{
-		GroupBase: NewGroupBase(GroupBaseOption{
-			Name:           option.Name,
-			Type:           C.URLTest,
-			Hidden:         option.Hidden,
-			Icon:           option.Icon,
-			Filter:         option.Filter,
-			ExcludeFilter:  option.ExcludeFilter,
-			ExcludeType:    option.ExcludeType,
-			TestTimeout:    option.TestTimeout,
-			MaxFailedTimes: option.MaxFailedTimes,
-			Providers:      providers,
-		}),
+		GroupBase:      groupBase,
 		fastSingle:     singledo.NewSingle[C.Proxy](time.Second * 10),
 		disableUDP:     option.DisableUDP,
 		testUrl:        option.URL,
@@ -329,5 +334,5 @@ func NewURLTest(option *GroupCommonOption, providers []P.ProxyProvider, options 
 		option(urlTest)
 	}
 
-	return urlTest
+	return urlTest, nil
 }
