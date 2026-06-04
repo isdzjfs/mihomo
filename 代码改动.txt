@@ -90,3 +90,14 @@
 - 修复 `BUG-A7-09`：Hysteria2 Realm inbound 的编译期接口断言改为 `(*Hysteria2RealmServer)(nil)`，让断言覆盖真正的目标类型。
 - 新增回归测试覆盖 Trojan CRLF 校验和 VLESS 截断 response addon 错误返回；Hysteria2 Realm 接口断言由 `listener/inbound` 包编译测试覆盖。
 - 验证：`rtk gofmt -w listener/trojan/server.go listener/trojan/server_test.go transport/vless/conn.go transport/vless/conn_test.go listener/inbound/hysteria2_realm.go` 已执行；`rtk go test ./listener/trojan ./transport/vless ./listener/inbound` 通过；`rtk git -c safe.directory=C:/Users/Sen/Documents/GitHub/mihomo diff --check -- listener/trojan/server.go listener/trojan/server_test.go transport/vless/conn.go transport/vless/conn_test.go listener/inbound/hysteria2_realm.go` 通过。
+
+2026-06-05（proxy-group/listener 回归修复补充）
+
+- 修复 `url-test` health-check 预热递归触发问题：`healthCheck()` 和显式 `URLTest()` 后的预热改为走 `fastWithHealthCheck(..., false)`，避免所有节点持续不可用时 `fast()` 再次异步触发 `healthCheck()` 形成后台循环。
+- 修复 `url-test` / `fallback` 手动选择死节点回归：手动选择只有在目标节点仍 `AliveForTestUrl()` 时才会命中；`fallback` 会清理已失效的手动选择并切回自动选择，`url-test` 会跳过失效手动节点并选择可用节点。
+- 修复手动选择状态误判：`DialContext` / `ListenPacketContext` 现在按“实际出站节点名是否等于 selected”判断 manual selected，自动 fallback 到其他节点后仍会正常重置 `fastSingle` 和触发失败统计。
+- 修复 listener / DNS 同端口地址切换 reload 失败：新增同端口通配地址冲突判断，`127.0.0.1:port` 与 `:port`、`0.0.0.0:port` 等互相切换时会先释放旧 socket，再创建新监听；无端口冲突时仍保留“新实例创建成功后再替换旧实例”的安全路径。
+- 恢复 Redir/TProxy UDP 启动失败语义：UDP 监听创建失败时只记录 warning，不再关闭已成功创建的 TCP listener，也不再把该错误汇总为 reload 失败。
+- 新增回归测试覆盖手动选择死节点 fallback、`url-test` all-dead 预热不触发 health-check，以及 listener/DNS 同端口通配地址冲突判断。
+- 提交并推送：`30012329 fix: address proxy group and listener regressions` 已推送到 `origin/Alpha`。
+- 验证：`rtk go test ./adapter/outboundgroup` 通过；`rtk go test ./listener ./dns` 通过；`rtk go test ./...` 通过，175 个包共 4442 个测试通过；`rtk git diff --check` 通过。
