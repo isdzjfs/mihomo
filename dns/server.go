@@ -94,6 +94,13 @@ func ReCreateServer(addr string, service resolver.Service) error {
 		return nil
 	}
 
+	if shouldCloseBeforeListen(address, addr) {
+		server = &Server{}
+		address = ""
+		shutdownServer(oldServer)
+		oldServer = nil
+	}
+
 	p, err := inbound.ListenPacket("udp", addr)
 	if err != nil {
 		log.Errorln("Start DNS server(UDP) error: %s", err.Error())
@@ -128,6 +135,27 @@ func ReCreateServer(addr string, service resolver.Service) error {
 		_ = newServer.tcpServer.ActivateAndServe()
 	}()
 	return nil
+}
+
+func shouldCloseBeforeListen(oldAddr string, newAddr string) bool {
+	if oldAddr == "" || oldAddr == newAddr {
+		return false
+	}
+	oldHost, oldPort, oldErr := net.SplitHostPort(oldAddr)
+	newHost, newPort, newErr := net.SplitHostPort(newAddr)
+	if oldErr != nil || newErr != nil || oldPort != newPort {
+		return false
+	}
+	return oldHost == newHost || isWildcardListenHost(oldHost) || isWildcardListenHost(newHost)
+}
+
+func isWildcardListenHost(host string) bool {
+	switch host {
+	case "", "*", "0.0.0.0", "::":
+		return true
+	default:
+		return false
+	}
 }
 
 func shutdownServer(server *Server) {

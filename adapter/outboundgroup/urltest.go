@@ -70,15 +70,16 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 	u.stateMux.RLock()
 	selected := u.selected
 	u.stateMux.RUnlock()
+	manualSelected := selected != "" && proxy.Name() == selected
 
-	log.Debugln("URLTest [%s] selected node [%s] (Alive: %t, ManualSelected: %t) for destination [%s]", u.Name(), proxy.Name(), proxy.AliveForTestUrl(u.testUrl), selected != "", metadata.String())
+	log.Debugln("URLTest [%s] selected node [%s] (Alive: %t, ManualSelected: %t) for destination [%s]", u.Name(), proxy.Name(), proxy.AliveForTestUrl(u.testUrl), manualSelected, metadata.String())
 
 	c, err = proxy.DialContext(ctx, metadata)
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
 		log.Debugln("URLTest [%s] dial node [%s] failed: %v", u.Name(), proxy.Name(), err)
-		if selected == "" {
+		if !manualSelected {
 			u.fastSingle.Reset()
 			u.onDialFailed(proxy.Type(), err, u.healthCheck)
 		}
@@ -89,7 +90,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 	// ExtendedWriter during the TLS handshake phase. Intercepting the first write
 	// via the wrapper conflicts with this dynamic writer replacement and breaks
 	// the Vision flow protocol.
-	bypassWrapper := selected != "" || proxy.Type() == C.Vless
+	bypassWrapper := manualSelected || proxy.Type() == C.Vless
 	if !bypassWrapper && N.NeedHandshake(c) {
 		c = callback.NewFirstWriteCallBackConn(c, func(err error) {
 			if err == nil {
@@ -100,7 +101,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 			}
 		})
 	} else if bypassWrapper {
-		log.Debugln("URLTest [%s] bypassing health tracking wrapper for node [%s] (Reason: ManualSelected=%t, Type=%s)", u.Name(), proxy.Name(), selected != "", proxy.Type().String())
+		log.Debugln("URLTest [%s] bypassing health tracking wrapper for node [%s] (Reason: ManualSelected=%t, Type=%s)", u.Name(), proxy.Name(), manualSelected, proxy.Type().String())
 	}
 
 	return c, err
@@ -113,13 +114,14 @@ func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	u.stateMux.RLock()
 	selected := u.selected
 	u.stateMux.RUnlock()
+	manualSelected := selected != "" && proxy.Name() == selected
 
 	pc, err := proxy.ListenPacketContext(ctx, metadata)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
 		log.Debugln("URLTest [%s] ListenPacket node [%s] failed: %v", u.Name(), proxy.Name(), err)
-		if selected == "" && proxy.Type() != C.Vless {
+		if !manualSelected && proxy.Type() != C.Vless {
 			u.fastSingle.Reset()
 			u.onDialFailed(proxy.Type(), err, u.healthCheck)
 		}
@@ -137,23 +139,35 @@ func (u *URLTest) healthCheck() {
 	u.fastSingle.Reset()
 	u.GroupBase.healthCheck()
 	u.fastSingle.Reset()
-	_ = u.fast(false) // preheat: immediately select best node after health check
+	_ = u.fastWithHealthCheck(false, false) // preheat without recursively triggering another health check
 }
 
 func (u *URLTest) fast(touch bool) C.Proxy {
+	return u.fastWithHealthCheck(touch, true)
+}
+
+func (u *URLTest) fastWithHealthCheck(touch bool, triggerHealthCheck bool) C.Proxy {
 	elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
 		proxies := u.GetProxies(touch)
 		selected, fastNode := u.snapshotState()
 
 		if selected != "" {
+			selectedFound := false
 			for _, proxy := range proxies {
 				if proxy.Name() == selected {
+					selectedFound = true
+					if !proxy.AliveForTestUrl(u.testUrl) {
+						log.Debugln("URLTest [%s] manual selected node [%s] is not alive, falling back to auto", u.Name(), selected)
+						break
+					}
 					log.Debugln("URLTest [%s] using manual selected node [%s]", u.Name(), selected)
 					u.setFastNode(proxy)
 					return proxy, nil
 				}
 			}
-			log.Debugln("URLTest [%s] manual selected node [%s] not found in proxies, falling back to auto", u.Name(), selected)
+			if !selectedFound {
+				log.Debugln("URLTest [%s] manual selected node [%s] not found in proxies, falling back to auto", u.Name(), selected)
+			}
 		}
 
 		var (
@@ -196,8 +210,10 @@ func (u *URLTest) fast(touch bool) C.Proxy {
 			}
 		} else if fastNode == nil || fastNotExist || !currentFastAlive {
 			fastNode = proxies[0]
-			// all nodes are dead, trigger async health check to recover
-			go u.healthCheck()
+			if triggerHealthCheck {
+				// all nodes are dead, trigger async health check to recover
+				go u.healthCheck()
+			}
 		}
 
 		u.setFastNode(fastNode)
@@ -289,7 +305,7 @@ func (u *URLTest) URLTest(ctx context.Context, url string, expectedStatus utils.
 	delays, err := u.GroupBase.URLTest(ctx, u.testUrl, expectedStatus)
 	// URL tests update alive/delay history; reset cache so next routing picks fresh best node.
 	u.fastSingle.Reset()
-	_ = u.fast(false)
+	_ = u.fastWithHealthCheck(false, false)
 	return delays, err
 }
 

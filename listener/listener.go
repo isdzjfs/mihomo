@@ -132,6 +132,27 @@ func genListenAddr(port int) string {
 	return genAddr(state.bindAddress, port, state.allowLan)
 }
 
+func shouldCloseBeforeListen(oldAddr string, newAddr string) bool {
+	if oldAddr == newAddr {
+		return false
+	}
+	oldHost, oldPort, oldErr := net.SplitHostPort(oldAddr)
+	newHost, newPort, newErr := net.SplitHostPort(newAddr)
+	if oldErr != nil || newErr != nil || oldPort != newPort {
+		return false
+	}
+	return oldHost == newHost || isWildcardListenHost(oldHost) || isWildcardListenHost(newHost)
+}
+
+func isWildcardListenHost(host string) bool {
+	switch strings.TrimSpace(host) {
+	case "", "*", "0.0.0.0", "::":
+		return true
+	default:
+		return false
+	}
+}
+
 func ReCreateHTTP(port int, tunnel C.Tunnel) error {
 	httpMux.Lock()
 	defer httpMux.Unlock()
@@ -156,6 +177,12 @@ func ReCreateHTTP(port int, tunnel C.Tunnel) error {
 			httpListener = nil
 		}
 		return nil
+	}
+
+	if oldListener != nil && shouldCloseBeforeListen(oldListener.RawAddress(), addr) {
+		_ = oldListener.Close()
+		httpListener = nil
+		oldListener = nil
 	}
 
 	newListener, err := http.New(addr, tunnel)
@@ -215,6 +242,17 @@ func ReCreateSocks(port int, tunnel C.Tunnel) error {
 			socksUDPListener = nil
 		}
 		return nil
+	}
+
+	if !shouldTCPIgnore && oldTCPListener != nil && shouldCloseBeforeListen(oldTCPListener.RawAddress(), addr) {
+		_ = oldTCPListener.Close()
+		socksListener = nil
+		oldTCPListener = nil
+	}
+	if !shouldUDPIgnore && oldUDPListener != nil && shouldCloseBeforeListen(oldUDPListener.RawAddress(), addr) {
+		_ = oldUDPListener.Close()
+		socksUDPListener = nil
+		oldUDPListener = nil
 	}
 
 	tcpListener := oldTCPListener
@@ -283,6 +321,17 @@ func ReCreateRedir(port int, tunnel C.Tunnel) error {
 		return nil
 	}
 
+	if !shouldTCPIgnore && oldTCPListener != nil && shouldCloseBeforeListen(oldTCPListener.RawAddress(), addr) {
+		_ = oldTCPListener.Close()
+		redirListener = nil
+		oldTCPListener = nil
+	}
+	if !shouldUDPIgnore && oldUDPListener != nil && shouldCloseBeforeListen(oldUDPListener.RawAddress(), addr) {
+		_ = oldUDPListener.Close()
+		redirUDPListener = nil
+		oldUDPListener = nil
+	}
+
 	tcpListener := oldTCPListener
 	if !shouldTCPIgnore {
 		tcpListener, err = redir.New(addr, tunnel)
@@ -295,10 +344,9 @@ func ReCreateRedir(port int, tunnel C.Tunnel) error {
 	if !shouldUDPIgnore {
 		udpListener, err = tproxy.NewUDP(addr, tunnel)
 		if err != nil {
-			if !shouldTCPIgnore {
-				_ = tcpListener.Close()
-			}
-			return err
+			log.Warnln("Failed to start Redir UDP Listener: %s", err)
+			err = nil
+			udpListener = nil
 		}
 	}
 
@@ -518,6 +566,17 @@ func ReCreateTProxy(port int, tunnel C.Tunnel) error {
 		return nil
 	}
 
+	if !shouldTCPIgnore && oldTCPListener != nil && shouldCloseBeforeListen(oldTCPListener.RawAddress(), addr) {
+		_ = oldTCPListener.Close()
+		tproxyListener = nil
+		oldTCPListener = nil
+	}
+	if !shouldUDPIgnore && oldUDPListener != nil && shouldCloseBeforeListen(oldUDPListener.RawAddress(), addr) {
+		_ = oldUDPListener.Close()
+		tproxyUDPListener = nil
+		oldUDPListener = nil
+	}
+
 	tcpListener := oldTCPListener
 	if !shouldTCPIgnore {
 		tcpListener, err = tproxy.New(addr, tunnel)
@@ -530,10 +589,9 @@ func ReCreateTProxy(port int, tunnel C.Tunnel) error {
 	if !shouldUDPIgnore {
 		udpListener, err = tproxy.NewUDP(addr, tunnel)
 		if err != nil {
-			if !shouldTCPIgnore {
-				_ = tcpListener.Close()
-			}
-			return err
+			log.Warnln("Failed to start TProxy UDP Listener: %s", err)
+			err = nil
+			udpListener = nil
 		}
 	}
 
@@ -597,6 +655,17 @@ func ReCreateMixed(port int, tunnel C.Tunnel) error {
 			mixedUDPLister = nil
 		}
 		return nil
+	}
+
+	if !shouldTCPIgnore && oldTCPListener != nil && shouldCloseBeforeListen(oldTCPListener.RawAddress(), addr) {
+		_ = oldTCPListener.Close()
+		mixedListener = nil
+		oldTCPListener = nil
+	}
+	if !shouldUDPIgnore && oldUDPListener != nil && shouldCloseBeforeListen(oldUDPListener.RawAddress(), addr) {
+		_ = oldUDPListener.Close()
+		mixedUDPLister = nil
+		oldUDPListener = nil
 	}
 
 	tcpListener := oldTCPListener

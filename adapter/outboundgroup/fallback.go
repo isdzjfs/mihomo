@@ -36,13 +36,14 @@ func (f *Fallback) DialContext(ctx context.Context, metadata *C.Metadata) (C.Con
 	f.stateMux.RLock()
 	selected := f.selected
 	f.stateMux.RUnlock()
+	manualSelected := selected != "" && proxy.Name() == selected
 
-	log.Debugln("Fallback [%s] selected node [%s] (Alive: %t, ManualSelected: %t) for destination [%s]", f.Name(), proxy.Name(), proxy.AliveForTestUrl(f.testUrl), selected != "", metadata.String())
+	log.Debugln("Fallback [%s] selected node [%s] (Alive: %t, ManualSelected: %t) for destination [%s]", f.Name(), proxy.Name(), proxy.AliveForTestUrl(f.testUrl), manualSelected, metadata.String())
 
 	c, err := proxy.DialContext(ctx, metadata)
 	if err == nil {
 		c.AppendToChains(f)
-	} else if selected == "" {
+	} else if !manualSelected {
 		log.Debugln("Fallback [%s] dial node [%s] failed: %v", f.Name(), proxy.Name(), err)
 		f.onDialFailed(proxy.Type(), err, f.healthCheck)
 	}
@@ -52,7 +53,7 @@ func (f *Fallback) DialContext(ctx context.Context, metadata *C.Metadata) (C.Con
 	// ExtendedWriter during the TLS handshake phase. Intercepting the first write
 	// via the wrapper conflicts with this dynamic writer replacement and breaks
 	// the Vision flow protocol.
-	bypassWrapper := selected != "" || proxy.Type() == C.Vless
+	bypassWrapper := manualSelected || proxy.Type() == C.Vless
 	if !bypassWrapper && N.NeedHandshake(c) {
 		c = callback.NewFirstWriteCallBackConn(c, func(err error) {
 			if err == nil {
@@ -63,7 +64,7 @@ func (f *Fallback) DialContext(ctx context.Context, metadata *C.Metadata) (C.Con
 			}
 		})
 	} else if bypassWrapper {
-		log.Debugln("Fallback [%s] bypassing health tracking wrapper for node [%s] (Reason: ManualSelected=%t, Type=%s)", f.Name(), proxy.Name(), selected != "", proxy.Type().String())
+		log.Debugln("Fallback [%s] bypassing health tracking wrapper for node [%s] (Reason: ManualSelected=%t, Type=%s)", f.Name(), proxy.Name(), manualSelected, proxy.Type().String())
 	}
 
 	return c, err
@@ -125,13 +126,22 @@ func (f *Fallback) findAliveProxy(touch bool) C.Proxy {
 	selected := f.getSelected()
 
 	if selected != "" {
+		selectedFound := false
 		for _, proxy := range proxies {
 			if proxy.Name() == selected {
-				log.Debugln("Fallback [%s] using manual selected node [%s]", f.Name(), selected)
-				return proxy
+				selectedFound = true
+				if proxy.AliveForTestUrl(f.testUrl) {
+					log.Debugln("Fallback [%s] using manual selected node [%s]", f.Name(), selected)
+					return proxy
+				}
+				log.Debugln("Fallback [%s] manual selected node [%s] is not alive, falling back to auto", f.Name(), selected)
+				f.setSelected("")
+				break
 			}
 		}
-		log.Debugln("Fallback [%s] manual selected node [%s] not found in proxies, falling back to auto", f.Name(), selected)
+		if !selectedFound {
+			log.Debugln("Fallback [%s] manual selected node [%s] not found in proxies, falling back to auto", f.Name(), selected)
+		}
 	}
 
 	for _, proxy := range proxies {
