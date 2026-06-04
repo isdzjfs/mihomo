@@ -136,7 +136,7 @@ func NewTrustTunnel(option TrustTunnelOption) (*TrustTunnel, error) {
 	}
 	tOption.TLSConfig = tlsConfig
 
-	client, err := trusttunnel.NewPoolClient(context.TODO(), tOption)
+	client, err := trusttunnel.NewPoolClient(context.Background(), tOption)
 	if err != nil {
 		return nil, err
 	}

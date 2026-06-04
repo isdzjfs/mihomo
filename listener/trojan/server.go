@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
@@ -29,7 +30,7 @@ import (
 )
 
 type Listener struct {
-	closed     bool
+	closed     atomic.Bool
 	config     LC.TrojanServer
 	listeners  []net.Listener
 	keys       map[[trojan.KeyLength]byte]string
@@ -72,7 +73,12 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 			return nil, err
 		}
 	}
-	sl = &Listener{false, config, nil, keys, pickCipher, h}
+	sl = &Listener{config: config, keys: keys, pickCipher: pickCipher, handler: h}
+	defer func() {
+		if err != nil {
+			_ = sl.Close()
+		}
+	}()
 
 	httpServer := http.Server{
 		IdleTimeout: 30 * time.Second,
@@ -169,6 +175,7 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 		} else if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
 		} else if !config.TrojanSSOption.Enabled {
+			_ = l.Close()
 			return nil, errors.New("disallow using Trojan without both certificates/reality/ss config")
 		}
 		sl.listeners = append(sl.listeners, l)
@@ -181,7 +188,7 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 			for {
 				c, err := l.Accept()
 				if err != nil {
-					if sl.closed {
+					if sl.closed.Load() {
 						break
 					}
 					continue
@@ -196,7 +203,7 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
 	var retErr error
 	for _, lis := range l.listeners {
 		err := lis.Close()

@@ -295,11 +295,11 @@ func NewHysteria2(option Hysteria2Option) (*Hysteria2, error) {
 			},
 			Resolver: func(ctx context.Context, host string, ipv4, ipv6 bool) ([]netip.Addr, error) {
 				if ipv4 && !ipv6 {
-					return resolver.LookupIPv4WithResolver(ctx, host, resolver.ProxyServerHostResolver)
+					return resolver.LookupIPv4WithResolver(ctx, host, resolver.ProxyServerHostResolverValue())
 				} else if ipv6 && !ipv4 {
-					return resolver.LookupIPv4WithResolver(ctx, host, resolver.ProxyServerHostResolver)
+					return resolver.LookupIPv4WithResolver(ctx, host, resolver.ProxyServerHostResolverValue())
 				}
-				return resolver.LookupIPWithResolver(ctx, host, resolver.ProxyServerHostResolver)
+				return resolver.LookupIPWithResolver(ctx, host, resolver.ProxyServerHostResolverValue())
 			},
 			Logger: log.SingLogger,
 		}

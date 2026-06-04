@@ -4,17 +4,18 @@ import (
 	"net"
 	"net/netip"
 
+	"github.com/metacubex/mihomo/common/atomic"
 	C "github.com/metacubex/mihomo/constant"
 )
 
-var skipAuthPrefixes []netip.Prefix
+var skipAuthPrefixes = atomic.NewTypedValue([]netip.Prefix(nil))
 
 func SetSkipAuthPrefixes(prefixes []netip.Prefix) {
-	skipAuthPrefixes = prefixes
+	skipAuthPrefixes.Store(append([]netip.Prefix(nil), prefixes...))
 }
 
 func SkipAuthPrefixes() []netip.Prefix {
-	return skipAuthPrefixes
+	return append([]netip.Prefix(nil), skipAuthPrefixes.Load()...)
 }
 
 func SkipAuthRemoteAddr(addr net.Addr) bool {
@@ -34,5 +35,5 @@ func SkipAuthRemoteAddress(addr string) bool {
 }
 
 func skipAuth(addr netip.Addr) bool {
-	return prefixesContains(skipAuthPrefixes, addr)
+	return prefixesContains(skipAuthPrefixes.Load(), addr)
 }

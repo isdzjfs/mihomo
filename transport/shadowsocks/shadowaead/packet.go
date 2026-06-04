@@ -83,11 +83,15 @@ func (c *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 
 // ReadFrom reads from the embedded PacketConn and decrypts into b.
 func (c *PacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
+	saltSize := c.Cipher.SaltSize()
+	if len(b) < saltSize {
+		return 0, nil, io.ErrShortBuffer
+	}
 	n, addr, err := c.EnhancePacketConn.ReadFrom(b)
 	if err != nil {
 		return n, addr, err
 	}
-	bb, err := Unpack(b[c.Cipher.SaltSize():], b[:n], c)
+	bb, err := Unpack(b[saltSize:], b[:n], c)
 	if err != nil {
 		return n, addr, err
 	}

@@ -40,9 +40,9 @@ func WithSecret(secret string) Option {
 }
 
 // ApplyConfig dispatch configure to all parts include ExternalController
-func ApplyConfig(cfg *config.Config) {
+func ApplyConfig(cfg *config.Config) error {
 	applyRoute(cfg)
-	executor.ApplyConfig(cfg, true)
+	return executor.ApplyConfig(cfg, true)
 }
 
 func applyRoute(cfg *config.Config) {
@@ -88,6 +88,5 @@ func Parse(configBytes []byte, options ...Option) error {
 		option(cfg)
 	}
 
-	ApplyConfig(cfg)
-	return nil
+	return ApplyConfig(cfg)
 }

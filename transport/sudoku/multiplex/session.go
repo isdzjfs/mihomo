@@ -21,6 +21,11 @@ const (
 	headerSize     = 1 + 4 + 4
 	maxFrameSize   = 256 * 1024
 	maxDataPayload = 32 * 1024
+
+	maxSessionStreams     = 1024
+	maxAcceptQueue        = 256
+	maxStreamQueuedBytes  = 1 << 20
+	maxStreamQueuedFrames = 256
 )
 
 type acceptEvent struct {
@@ -64,7 +69,7 @@ func NewServerSession(conn net.Conn) (*Session, error) {
 	s := &Session{
 		conn:     conn,
 		streams:  make(map[uint32]*stream),
-		acceptCh: make(chan acceptEvent, 256),
+		acceptCh: make(chan acceptEvent, maxAcceptQueue),
 		closed:   make(chan struct{}),
 	}
 	go s.readLoop()
@@ -126,10 +131,17 @@ func (s *Session) Close() error {
 	return nil
 }
 
-func (s *Session) registerStream(st *stream) {
+func (s *Session) registerStream(st *stream) error {
 	s.streamsMu.Lock()
+	defer s.streamsMu.Unlock()
+	if _, exists := s.streams[st.id]; exists {
+		return fmt.Errorf("stream already exists")
+	}
+	if len(s.streams) >= maxSessionStreams {
+		return fmt.Errorf("stream limit exceeded: %d", maxSessionStreams)
+	}
 	s.streams[st.id] = st
-	s.streamsMu.Unlock()
+	return nil
 }
 
 func (s *Session) getStream(id uint32) *stream {
@@ -198,7 +210,9 @@ func (s *Session) OpenStream(openPayload []byte) (net.Conn, error) {
 
 	streamID := s.nextStreamID()
 	st := newStream(s, streamID)
-	s.registerStream(st)
+	if err := s.registerStream(st); err != nil {
+		return nil, err
+	}
 
 	if err := s.sendFrame(frameOpen, streamID, openPayload); err != nil {
 		st.closeNoSend(err)
@@ -257,20 +271,22 @@ func (s *Session) readLoop() {
 				s.sendReset(streamID, "invalid stream id")
 				continue
 			}
-			if existing := s.getStream(streamID); existing != nil {
-				s.sendReset(streamID, "stream already exists")
+			st := newStream(s, streamID)
+			if err := s.registerStream(st); err != nil {
+				s.sendReset(streamID, err.Error())
 				continue
 			}
-			st := newStream(s, streamID)
-			s.registerStream(st)
-			go func() {
-				select {
-				case s.acceptCh <- acceptEvent{stream: st, payload: payload}:
-				case <-s.closed:
-					st.closeNoSend(io.ErrClosedPipe)
-					s.removeStream(streamID)
-				}
-			}()
+			select {
+			case s.acceptCh <- acceptEvent{stream: st, payload: payload}:
+			case <-s.closed:
+				st.closeNoSend(io.ErrClosedPipe)
+				s.removeStream(streamID)
+			default:
+				err := errors.New("accept queue full")
+				st.closeNoSend(err)
+				s.removeStream(streamID)
+				s.sendReset(streamID, err.Error())
+			}
 
 		case frameData:
 			st := s.getStream(streamID)
@@ -280,7 +296,11 @@ func (s *Session) readLoop() {
 			if len(payload) == 0 {
 				continue
 			}
-			st.enqueue(payload)
+			if err := st.enqueue(payload); err != nil {
+				st.closeNoSend(err)
+				s.removeStream(streamID)
+				s.sendReset(streamID, err.Error())
+			}
 
 		case frameClose:
 			st := s.getStream(streamID)
@@ -338,12 +358,13 @@ type stream struct {
 	session *Session
 	id      uint32
 
-	mu       sync.Mutex
-	cond     *sync.Cond
-	closed   bool
-	closeErr error
-	readBuf  []byte
-	queue    [][]byte
+	mu          sync.Mutex
+	cond        *sync.Cond
+	closed      bool
+	closeErr    error
+	readBuf     []byte
+	queue       [][]byte
+	queuedBytes int
 
 	localAddr  net.Addr
 	remoteAddr net.Addr
@@ -360,19 +381,26 @@ func newStream(session *Session, id uint32) *stream {
 	return st
 }
 
-func (c *stream) enqueue(payload []byte) {
+func (c *stream) enqueue(payload []byte) error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.closed {
-		c.mu.Unlock()
-		return
+		return io.ErrClosedPipe
+	}
+	if c.queuedBytes+len(payload) > maxStreamQueuedBytes {
+		return fmt.Errorf("stream queued bytes exceed limit: %d", maxStreamQueuedBytes)
+	}
+	if len(c.queue) >= maxStreamQueuedFrames {
+		return fmt.Errorf("stream queued frames exceed limit: %d", maxStreamQueuedFrames)
 	}
 	if len(c.readBuf) == 0 && len(c.queue) == 0 {
 		c.readBuf = payload
 	} else {
 		c.queue = append(c.queue, payload)
 	}
+	c.queuedBytes += len(payload)
 	c.cond.Signal()
-	c.mu.Unlock()
+	return nil
 }
 
 func (c *stream) closeNoSend(err error) {
@@ -388,6 +416,9 @@ func (c *stream) closeNoSend(err error) {
 	if c.closeErr == nil {
 		c.closeErr = err
 	}
+	c.readBuf = nil
+	c.queue = nil
+	c.queuedBytes = 0
 	c.cond.Broadcast()
 	c.mu.Unlock()
 }
@@ -424,6 +455,7 @@ func (c *stream) Read(p []byte) (int, error) {
 
 	n := copy(p, c.readBuf)
 	c.readBuf = c.readBuf[n:]
+	c.queuedBytes -= n
 	return n, nil
 }
 
@@ -470,6 +502,9 @@ func (c *stream) Close() error {
 	if c.closeErr == nil {
 		c.closeErr = io.ErrClosedPipe
 	}
+	c.readBuf = nil
+	c.queue = nil
+	c.queuedBytes = 0
 	c.cond.Broadcast()
 	c.mu.Unlock()
 

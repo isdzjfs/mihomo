@@ -3,7 +3,13 @@ package trie
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+)
+
+const (
+	maxDomainSetUint64Entries = 8 * 1024 * 1024
+	maxDomainSetLabelsLength  = 64 * 1024 * 1024
 )
 
 func (ss *DomainSet) WriteBin(w io.Writer) (err error) {
@@ -72,6 +78,9 @@ func ReadDomainSetBin(r io.Reader) (ds *DomainSet, err error) {
 	if length < 1 {
 		return nil, errors.New("length is invalid")
 	}
+	if length > maxDomainSetUint64Entries {
+		return nil, fmt.Errorf("leaves length %d exceeds maximum %d", length, maxDomainSetUint64Entries)
+	}
 	ds.leaves = make([]uint64, length)
 	for i := int64(0); i < length; i++ {
 		err = binary.Read(r, binary.BigEndian, &ds.leaves[i])
@@ -88,6 +97,9 @@ func ReadDomainSetBin(r io.Reader) (ds *DomainSet, err error) {
 	if length < 1 {
 		return nil, errors.New("length is invalid")
 	}
+	if length > maxDomainSetUint64Entries {
+		return nil, fmt.Errorf("label bitmap length %d exceeds maximum %d", length, maxDomainSetUint64Entries)
+	}
 	ds.labelBitmap = make([]uint64, length)
 	for i := int64(0); i < length; i++ {
 		err = binary.Read(r, binary.BigEndian, &ds.labelBitmap[i])
@@ -103,6 +115,9 @@ func ReadDomainSetBin(r io.Reader) (ds *DomainSet, err error) {
 	}
 	if length < 1 {
 		return nil, errors.New("length is invalid")
+	}
+	if length > maxDomainSetLabelsLength {
+		return nil, fmt.Errorf("labels length %d exceeds maximum %d", length, maxDomainSetLabelsLength)
 	}
 	ds.labels = make([]byte, length)
 	_, err = io.ReadFull(r, ds.labels)

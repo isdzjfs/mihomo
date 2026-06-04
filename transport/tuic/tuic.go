@@ -23,6 +23,7 @@ func NewClientV5(clientOption *ClientOptionV5, udp bool, dialFn DialFunc) Client
 type DialFunc = types.DialFunc
 
 var TooManyOpenStreams = types.TooManyOpenStreams
+var ClientClosed = types.ClientClosed
 
 const DefaultStreamReceiveWindow = common.DefaultStreamReceiveWindow
 const DefaultConnectionReceiveWindow = common.DefaultConnectionReceiveWindow

@@ -142,6 +142,14 @@ func (s *Snell) ProxyInfo() C.ProxyInfo {
 	return info
 }
 
+// Close implements C.ProxyAdapter
+func (s *Snell) Close() error {
+	if s.pool != nil {
+		return s.pool.Close()
+	}
+	return nil
+}
+
 func NewSnell(option SnellOption) (*Snell, error) {
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
 	psk := []byte(option.Psk)

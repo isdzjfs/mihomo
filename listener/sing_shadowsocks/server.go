@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync/atomic"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	"github.com/metacubex/mihomo/common/sockopt"
@@ -29,7 +30,7 @@ import (
 )
 
 type Listener struct {
-	closed       bool
+	closed       atomic.Bool
 	config       LC.ShadowsocksServer
 	listeners    []net.Listener
 	udpListeners []net.PacketConn
@@ -53,16 +54,17 @@ func (s *shadowTLSService) NewConnection(ctx context.Context, conn net.Conn, met
 	return s.Service.NewConnection(ctx, conn, metadata)
 }
 
-func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addition) (C.MultiAddrListener, error) {
+func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addition) (listener C.MultiAddrListener, err error) {
 	var sl *Listener
-	var err error
 	if len(additions) == 0 {
 		additions = []inbound.Addition{
 			inbound.WithInName("DEFAULT-SHADOWSOCKS"),
 			inbound.WithSpecialRules(""),
 		}
 		defer func() {
-			_listener = sl
+			if err == nil && listener == sl {
+				_listener = sl
+			}
 		}()
 	}
 
@@ -80,6 +82,11 @@ func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addi
 
 	sl = &Listener{}
 	sl.config = config
+	defer func() {
+		if err != nil && sl != nil {
+			_ = sl.Close()
+		}
+	}()
 
 	switch {
 	case config.Cipher == shadowsocks.MethodNone:
@@ -207,7 +214,7 @@ func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addi
 					}
 					if err != nil {
 						buff.Release()
-						if sl.closed {
+						if sl.closed.Load() {
 							break
 						}
 						continue
@@ -233,7 +240,7 @@ func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addi
 			for {
 				c, err := l.Accept()
 				if err != nil {
-					if sl.closed {
+					if sl.closed.Load() {
 						break
 					}
 					continue
@@ -248,7 +255,7 @@ func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addi
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
 	var retErr error
 	for _, lis := range l.listeners {
 		err := lis.Close()
@@ -295,7 +302,7 @@ func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbou
 }
 
 func HandleShadowSocks(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) bool {
-	if _listener != nil && _listener.service != nil {
+	if _listener != nil && !_listener.closed.Load() && _listener.service != nil {
 		go _listener.HandleConn(conn, tunnel, additions...)
 		return true
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -35,6 +36,10 @@ type wireguardGoDevice interface {
 	IpcSet(uapiConf string) error
 }
 
+var newWireGuardStackDevice = func(localPrefixes []netip.Prefix, mtu uint32) (wireguard.Device, error) {
+	return wireguard.NewStackDevice(localPrefixes, mtu)
+}
+
 type WireGuard struct {
 	*Base
 	bind      *wireguard.ClientBind
@@ -52,6 +57,8 @@ type WireGuard struct {
 	serverAddrMap   map[M.Socksaddr]netip.AddrPort
 	serverAddrTime  atomic.TypedValue[time.Time]
 	serverAddrMutex sync.Mutex
+	closeOnce       sync.Once
+	closeErr        error
 }
 
 type WireGuardOption struct {
@@ -164,8 +171,8 @@ func (option WireGuardOption) Prefixes() ([]netip.Prefix, error) {
 	return localPrefixes, nil
 }
 
-func NewWireGuard(option WireGuardOption) (*WireGuard, error) {
-	outbound := &WireGuard{
+func NewWireGuard(option WireGuardOption) (outbound *WireGuard, err error) {
+	outbound = &WireGuard{
 		Base: NewBase(BaseOption{
 			Name:         option.Name,
 			Addr:         net.JoinHostPort(option.Server, strconv.Itoa(option.Port)),
@@ -177,6 +184,13 @@ func NewWireGuard(option WireGuardOption) (*WireGuard, error) {
 			Prefer:       option.IPVersion,
 		}),
 	}
+	committed := false
+	candidate := outbound
+	defer func() {
+		if !committed && err != nil {
+			_ = candidate.Close()
+		}
+	}()
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
 	singDialer := proxydialer.NewSingDialer(proxydialer.NewSlowDownDialer(outbound.dialer, slowdown.New()))
 
@@ -198,7 +212,6 @@ func NewWireGuard(option WireGuardOption) (*WireGuard, error) {
 	}
 	outbound.bind = wireguard.NewClientBind(context.Background(), wgSingErrorHandler{outbound.Name()}, singDialer, isConnect, outbound.connectAddr.AddrPort(), reserved)
 
-	var err error
 	outbound.localPrefixes, err = option.Prefixes()
 	if err != nil {
 		return nil, err
@@ -264,7 +277,7 @@ func NewWireGuard(option WireGuardOption) (*WireGuard, error) {
 	if len(outbound.localPrefixes) == 0 {
 		return nil, E.New("missing local address")
 	}
-	outbound.tunDevice, err = wireguard.NewStackDevice(outbound.localPrefixes, uint32(mtu))
+	outbound.tunDevice, err = newWireGuardStackDevice(outbound.localPrefixes, uint32(mtu))
 	if err != nil {
 		return nil, E.Cause(err, "create WireGuard device")
 	}
@@ -305,6 +318,7 @@ func NewWireGuard(option WireGuardOption) (*WireGuard, error) {
 		})
 	}
 
+	committed = true
 	return outbound, nil
 }
 
@@ -544,10 +558,24 @@ func (w *WireGuard) genIpcConf(ctx context.Context, updateOnly bool) (string, er
 
 // Close implements C.ProxyAdapter
 func (w *WireGuard) Close() error {
-	if w.device != nil {
-		w.device.Close()
+	if w == nil {
+		return nil
 	}
-	return nil
+	w.closeOnce.Do(func() {
+		var errs []error
+		if w.device != nil {
+			w.device.Close()
+		} else {
+			if w.tunDevice != nil {
+				errs = append(errs, w.tunDevice.Close())
+			}
+			if w.bind != nil {
+				errs = append(errs, w.bind.Close())
+			}
+		}
+		w.closeErr = errors.Join(errs...)
+	})
+	return w.closeErr
 }
 
 func (w *WireGuard) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn, err error) {
@@ -556,7 +584,7 @@ func (w *WireGuard) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.
 		return nil, err
 	}
 	if !metadata.Resolved() || w.resolver != nil {
-		r := resolver.DefaultResolver
+		r := resolver.DefaultResolverValue()
 		if w.resolver != nil {
 			r = w.resolver
 		}
@@ -596,7 +624,7 @@ func (w *WireGuard) ListenPacketContext(ctx context.Context, metadata *C.Metadat
 
 func (w *WireGuard) ResolveUDP(ctx context.Context, metadata *C.Metadata) error {
 	if (!metadata.Resolved() || w.resolver != nil) && metadata.Host != "" {
-		r := resolver.DefaultResolver
+		r := resolver.DefaultResolverValue()
 		if w.resolver != nil {
 			r = w.resolver
 		}

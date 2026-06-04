@@ -336,6 +336,8 @@ type NatTable interface {
 
 	GetOrCreateLockForLocalConn(lAddr string, key string) (*sync.Cond, bool)
 
+	HasLockForLocalConn(lAddr string, key string) bool
+
 	DeleteForLocalConn(lAddr, key string)
 
 	DeleteLockForLocalConn(lAddr, key string)

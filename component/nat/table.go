@@ -69,6 +69,15 @@ func (t *Table) GetOrCreateLockForLocalConn(lAddr, key string) (*sync.Cond, bool
 	return item, loaded
 }
 
+func (t *Table) HasLockForLocalConn(lAddr, key string) bool {
+	entry, loaded := t.getEntry(lAddr)
+	if !loaded {
+		return false
+	}
+	_, loaded = entry.LocalLockMap.Load(key)
+	return loaded
+}
+
 func (t *Table) DeleteForLocalConn(lAddr, key string) {
 	entry, loaded := t.getEntry(lAddr)
 	if !loaded {

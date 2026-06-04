@@ -7,6 +7,7 @@ import (
 	"io"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/pool"
@@ -60,8 +61,9 @@ type mrsRuleStrategy interface {
 }
 
 type baseProvider struct {
-	behavior P.RuleBehavior
-	strategy ruleStrategy
+	behavior   P.RuleBehavior
+	strategyMu sync.RWMutex
+	strategy   ruleStrategy
 }
 
 func (bp *baseProvider) Type() P.ProviderType {
@@ -73,15 +75,32 @@ func (bp *baseProvider) Behavior() P.RuleBehavior {
 }
 
 func (bp *baseProvider) Count() int {
-	return bp.strategy.Count()
+	strategy := bp.loadStrategy()
+	if strategy == nil {
+		return 0
+	}
+	return strategy.Count()
 }
 
 func (bp *baseProvider) Match(metadata *C.Metadata, helper C.RuleMatchHelper) bool {
-	return bp.strategy != nil && bp.strategy.Match(metadata, helper)
+	strategy := bp.loadStrategy()
+	return strategy != nil && strategy.Match(metadata, helper)
 }
 
 func (bp *baseProvider) Strategy() any {
+	return bp.loadStrategy()
+}
+
+func (bp *baseProvider) loadStrategy() ruleStrategy {
+	bp.strategyMu.RLock()
+	defer bp.strategyMu.RUnlock()
 	return bp.strategy
+}
+
+func (bp *baseProvider) storeStrategy(strategy ruleStrategy) {
+	bp.strategyMu.Lock()
+	bp.strategy = strategy
+	bp.strategyMu.Unlock()
 }
 
 type ruleSetProvider struct {
@@ -110,7 +129,7 @@ func (rp *ruleSetProvider) MarshalJSON() ([]byte, error) {
 			Behavior:    rp.behavior.String(),
 			Format:      rp.format.String(),
 			Name:        rp.Fetcher.Name(),
-			RuleCount:   rp.strategy.Count(),
+			RuleCount:   rp.Count(),
 			Type:        rp.Type().String(),
 			UpdatedAt:   rp.UpdatedAt(),
 			VehicleType: rp.VehicleType().String(),
@@ -131,14 +150,15 @@ func NewRuleSetProvider(name string, behavior P.RuleBehavior, format P.RuleForma
 	}
 
 	onUpdate := func(strategy ruleStrategy) {
-		rp.strategy = strategy
+		rp.storeStrategy(strategy)
 		tunnel.RuleUpdateCallback().Emit(rp)
 	}
 
-	rp.strategy = newStrategy(behavior, parse)
+	strategy := newStrategy(behavior, parse)
 	if len(payload) > 0 { // using as fallback rules
-		rp.strategy = rulesParseInline(payload, rp.strategy)
+		strategy = rulesParseInline(payload, strategy)
 	}
+	rp.storeStrategy(strategy)
 	rp.Fetcher = resource.NewFetcher(name, interval, vehicle, func(bytes []byte) (ruleStrategy, error) {
 		return rulesParse(bytes, newStrategy(behavior, parse), format)
 	}, onUpdate)

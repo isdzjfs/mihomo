@@ -1,6 +1,7 @@
 package route
 
 import (
+	"errors"
 	"net/netip"
 	"path/filepath"
 
@@ -355,15 +356,16 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 
 	ports := listener.GetPorts()
 
-	listener.ReCreateHTTP(pointerOrDefault(general.Port, ports.Port), tunnel.Tunnel)
-	listener.ReCreateSocks(pointerOrDefault(general.SocksPort, ports.SocksPort), tunnel.Tunnel)
-	listener.ReCreateRedir(pointerOrDefault(general.RedirPort, ports.RedirPort), tunnel.Tunnel)
-	listener.ReCreateTProxy(pointerOrDefault(general.TProxyPort, ports.TProxyPort), tunnel.Tunnel)
-	listener.ReCreateMixed(pointerOrDefault(general.MixedPort, ports.MixedPort), tunnel.Tunnel)
-	listener.ReCreateTun(pointerOrDefaultTun(general.Tun, listener.LastTunConf), tunnel.Tunnel)
-	listener.ReCreateShadowSocks(pointerOrDefault(general.ShadowSocksConfig, ports.ShadowSocksConfig), tunnel.Tunnel)
-	listener.ReCreateVmess(pointerOrDefault(general.VmessConfig, ports.VmessConfig), tunnel.Tunnel)
-	listener.ReCreateTuic(pointerOrDefaultTuicServer(general.TuicServer, listener.LastTuicConf), tunnel.Tunnel)
+	var errs []error
+	errs = append(errs, listener.ReCreateHTTP(pointerOrDefault(general.Port, ports.Port), tunnel.Tunnel))
+	errs = append(errs, listener.ReCreateSocks(pointerOrDefault(general.SocksPort, ports.SocksPort), tunnel.Tunnel))
+	errs = append(errs, listener.ReCreateRedir(pointerOrDefault(general.RedirPort, ports.RedirPort), tunnel.Tunnel))
+	errs = append(errs, listener.ReCreateTProxy(pointerOrDefault(general.TProxyPort, ports.TProxyPort), tunnel.Tunnel))
+	errs = append(errs, listener.ReCreateMixed(pointerOrDefault(general.MixedPort, ports.MixedPort), tunnel.Tunnel))
+	errs = append(errs, listener.ReCreateTun(pointerOrDefaultTun(general.Tun, listener.LastTunConf), tunnel.Tunnel))
+	errs = append(errs, listener.ReCreateShadowSocks(pointerOrDefault(general.ShadowSocksConfig, ports.ShadowSocksConfig), tunnel.Tunnel))
+	errs = append(errs, listener.ReCreateVmess(pointerOrDefault(general.VmessConfig, ports.VmessConfig), tunnel.Tunnel))
+	errs = append(errs, listener.ReCreateTuic(pointerOrDefaultTuicServer(general.TuicServer, listener.LastTuicConf), tunnel.Tunnel))
 
 	if general.Mode != nil {
 		tunnel.SetMode(*general.Mode)
@@ -378,7 +380,13 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if general.IPv6 != nil {
-		resolver.DisableIPv6 = !*general.IPv6
+		resolver.SetDisableIPv6(!*general.IPv6)
+	}
+
+	if err := errors.Join(errs...); err != nil {
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, newError(err.Error()))
+		return
 	}
 
 	render.NoContent(w, r)
@@ -431,7 +439,11 @@ func updateConfigs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	executor.ApplyConfig(cfg, force)
+	if err := executor.ApplyConfig(cfg, force); err != nil {
+		render.Status(r, http.StatusInternalServerError)
+		render.JSON(w, r, newError(err.Error()))
+		return
+	}
 	render.NoContent(w, r)
 }
 

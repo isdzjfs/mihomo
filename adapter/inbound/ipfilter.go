@@ -4,26 +4,27 @@ import (
 	"net"
 	"net/netip"
 
+	"github.com/metacubex/mihomo/common/atomic"
 	C "github.com/metacubex/mihomo/constant"
 )
 
-var lanAllowedIPs []netip.Prefix
-var lanDisAllowedIPs []netip.Prefix
+var lanAllowedIPs = atomic.NewTypedValue([]netip.Prefix(nil))
+var lanDisAllowedIPs = atomic.NewTypedValue([]netip.Prefix(nil))
 
 func SetAllowedIPs(prefixes []netip.Prefix) {
-	lanAllowedIPs = prefixes
+	lanAllowedIPs.Store(append([]netip.Prefix(nil), prefixes...))
 }
 
 func SetDisAllowedIPs(prefixes []netip.Prefix) {
-	lanDisAllowedIPs = prefixes
+	lanDisAllowedIPs.Store(append([]netip.Prefix(nil), prefixes...))
 }
 
 func AllowedIPs() []netip.Prefix {
-	return lanAllowedIPs
+	return append([]netip.Prefix(nil), lanAllowedIPs.Load()...)
 }
 
 func DisAllowedIPs() []netip.Prefix {
-	return lanDisAllowedIPs
+	return append([]netip.Prefix(nil), lanDisAllowedIPs.Load()...)
 }
 
 func IsRemoteAddrDisAllowed(addr net.Addr) bool {
@@ -39,9 +40,9 @@ func IsRemoteAddrDisAllowed(addr net.Addr) bool {
 }
 
 func isAllowed(addr netip.Addr) bool {
-	return prefixesContains(lanAllowedIPs, addr)
+	return prefixesContains(lanAllowedIPs.Load(), addr)
 }
 
 func isDisAllowed(addr netip.Addr) bool {
-	return prefixesContains(lanDisAllowedIPs, addr)
+	return prefixesContains(lanDisAllowedIPs.Load(), addr)
 }

@@ -27,7 +27,7 @@ import (
 )
 
 type Listener struct {
-	closed    bool
+	closed    atomic.Bool
 	config    LC.AnyTLSServer
 	listeners []net.Listener
 	tlsConfig *tls.Config
@@ -79,6 +79,11 @@ func New(config LC.AnyTLSServer, tunnel C.Tunnel, additions ...inbound.Addition)
 		tlsConfig: tlsConfig,
 		userMap:   make(map[[32]byte]string),
 	}
+	defer func() {
+		if err != nil {
+			_ = sl.Close()
+		}
+	}()
 
 	for user, password := range config.Users {
 		sl.userMap[sha256.Sum256([]byte(password))] = user
@@ -113,6 +118,7 @@ func New(config LC.AnyTLSServer, tunnel C.Tunnel, additions ...inbound.Addition)
 		if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
 		} else {
+			_ = l.Close()
 			return nil, errors.New("disallow using AnyTLS without certificates config")
 		}
 		sl.listeners = append(sl.listeners, l)
@@ -121,7 +127,7 @@ func New(config LC.AnyTLSServer, tunnel C.Tunnel, additions ...inbound.Addition)
 			for {
 				c, err := l.Accept()
 				if err != nil {
-					if sl.closed {
+					if sl.closed.Load() {
 						break
 					}
 					continue
@@ -135,7 +141,7 @@ func New(config LC.AnyTLSServer, tunnel C.Tunnel, additions ...inbound.Addition)
 }
 
 func (l *Listener) Close() error {
-	l.closed = true
+	l.closed.Store(true)
 	var retErr error
 	for _, lis := range l.listeners {
 		err := lis.Close()

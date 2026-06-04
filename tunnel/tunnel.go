@@ -63,10 +63,15 @@ var (
 	findProcessMode = atomic.NewInt32Enum(process.FindProcessStrict)
 
 	snifferDispatcher *sniffer.Dispatcher
-	sniffingEnable    = false
+	snifferState      = atomic.NewTypedValue(snifferRuntimeState{})
 
 	ruleUpdateCallback = utils.NewCallback[P.RuleProvider]()
 )
+
+type snifferRuntimeState struct {
+	dispatcher *sniffer.Dispatcher
+	enable     bool
+}
 
 type tunnel struct{}
 
@@ -147,15 +152,15 @@ func Status() TunnelStatus {
 }
 
 func SetSniffing(b bool) {
-	if snifferDispatcher.Enable() {
-		configMux.Lock()
-		sniffingEnable = b
-		configMux.Unlock()
+	state := snifferState.Load()
+	if state.dispatcher != nil && state.dispatcher.Enable() {
+		state.enable = b
+		snifferState.Store(state)
 	}
 }
 
 func IsSniffing() bool {
-	return sniffingEnable
+	return snifferState.Load().enable
 }
 
 // TCPIn return fan-in queue
@@ -254,10 +259,8 @@ func UpdateListeners(newListeners map[string]C.InboundListener) {
 }
 
 func UpdateSniffer(dispatcher *sniffer.Dispatcher) {
-	configMux.Lock()
 	snifferDispatcher = dispatcher
-	sniffingEnable = dispatcher.Enable()
-	configMux.Unlock()
+	snifferState.Store(snifferRuntimeState{dispatcher: dispatcher, enable: dispatcher.Enable()})
 }
 
 // Mode return current mode
@@ -310,7 +313,7 @@ func preHandleMetadata(metadata *C.Metadata) error {
 				// only clear dstIP if it is confirmed to be a fake IP
 				metadata.DstIP = netip.Addr{}
 				metadata.DNSMode = C.DNSFakeIP
-			} else if node, ok := resolver.DefaultHosts.Search(host, false); ok {
+			} else if node, ok := resolver.SearchDefaultHosts(host, false); ok {
 				// redir-host should lookup the hosts
 				metadata.DstIP, _ = node.RandIP()
 			} else if node != nil && node.IsDomain {
@@ -319,7 +322,7 @@ func preHandleMetadata(metadata *C.Metadata) error {
 		} else if resolver.IsFakeIP(metadata.DstIP) {
 			return fmt.Errorf("fake DNS record %s missing", metadata.DstIP)
 		}
-	} else if node, ok := resolver.DefaultHosts.Search(metadata.Host, true); ok {
+	} else if node, ok := resolver.SearchDefaultHosts(metadata.Host, true); ok {
 		// try use domain mapping
 		metadata.Host = node.Domain
 	}
@@ -343,7 +346,7 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		attemptProcessLookup = metadata.Type != C.INNER
 	)
 
-	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+	if node, ok := resolver.SearchDefaultHosts(metadata.Host, false); ok {
 		metadata.DstIP, _ = node.RandIP()
 		resolved = true
 	}
@@ -447,8 +450,9 @@ func handleUDPConn(packet C.PacketAdapter) {
 	key := packet.Key()
 	sender, loaded := natTable.GetOrCreate(key, func() C.PacketSender {
 		sender := newPacketSender()
-		if sniffingEnable && snifferDispatcher.Enable() {
-			return snifferDispatcher.UDPSniff(packet, sender)
+		sniffing := snifferState.Load()
+		if sniffing.enable && sniffing.dispatcher != nil && sniffing.dispatcher.Enable() {
+			return sniffing.dispatcher.UDPSniff(packet, sender)
 		}
 		return sender
 	})
@@ -531,10 +535,11 @@ func handleTCPConn(connCtx C.ConnContext) {
 
 	conn := connCtx.Conn()
 	conn.ResetPeeked() // reset before sniffer
-	if sniffingEnable && snifferDispatcher.Enable() {
+	sniffing := snifferState.Load()
+	if sniffing.enable && sniffing.dispatcher != nil && sniffing.dispatcher.Enable() {
 		// Try to sniff a domain when `preHandleMetadata` failed, this is usually
 		// caused by a "Fake DNS record missing" error when enhanced-mode is fake-ip.
-		if snifferDispatcher.TCPSniff(conn, metadata) {
+		if sniffing.dispatcher.TCPSniff(conn, metadata) {
 			// we now have a domain name
 			preHandleFailed = false
 		}
@@ -566,7 +571,7 @@ func handleTCPConn(connCtx C.ConnContext) {
 
 	dialMetadata := metadata
 	if len(metadata.Host) > 0 {
-		if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+		if node, ok := resolver.SearchDefaultHosts(metadata.Host, false); ok {
 			if dstIp, _ := node.RandIP(); !resolver.IsFakeIP(dstIp) {
 				dialMetadata.DstIP = dstIp
 				dialMetadata.DNSMode = C.DNSHosts
@@ -671,11 +676,14 @@ func cloneMap[K comparable, V any](src map[K]V) map[K]V {
 
 func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
 	configMux.RLock()
-	defer configMux.RUnlock()
+	rulesSnapshot := getRules(metadata)
+	rulesSnapshot = append([]C.Rule(nil), rulesSnapshot...)
+	proxiesSnapshot := cloneMap(proxies)
+	configMux.RUnlock()
 
-	for _, rule := range getRules(metadata) {
+	for _, rule := range rulesSnapshot {
 		if matched, ada := rule.Match(metadata, helper); matched {
-			adapter, ok := proxies[ada]
+			adapter, ok := proxiesSnapshot[ada]
 			if !ok {
 				continue
 			}
@@ -702,7 +710,7 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 		}
 	}
 
-	return proxies["DIRECT"], nil, nil
+	return proxiesSnapshot["DIRECT"], nil, nil
 }
 
 func getRules(metadata *C.Metadata) []C.Rule {

@@ -47,6 +47,8 @@ type Masque struct {
 	runMutex  sync.Mutex
 	running   atomic.Bool
 	runDevice atomic.Bool
+	closeOnce sync.Once
+	closeErr  error
 
 	option MasqueOption
 }
@@ -103,8 +105,8 @@ func (option MasqueOption) Prefixes() ([]netip.Prefix, error) {
 	return localPrefixes, nil
 }
 
-func NewMasque(option MasqueOption) (*Masque, error) {
-	outbound := &Masque{
+func NewMasque(option MasqueOption) (outbound *Masque, err error) {
+	outbound = &Masque{
 		Base: NewBase(BaseOption{
 			Name:         option.Name,
 			Addr:         net.JoinHostPort(option.Server, strconv.Itoa(option.Port)),
@@ -116,6 +118,13 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 			Prefer:       option.IPVersion,
 		}),
 	}
+	committed := false
+	candidate := outbound
+	defer func() {
+		if !committed && err != nil {
+			_ = candidate.Close()
+		}
+	}()
 	outbound.dialer = option.NewDialer(outbound.DialOptions())
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -211,7 +220,7 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 	if len(prefixes) == 0 {
 		return nil, errors.New("missing local address")
 	}
-	outbound.tunDevice, err = wireguard.NewStackDevice(prefixes, uint32(mtu))
+	outbound.tunDevice, err = newWireGuardStackDevice(prefixes, uint32(mtu))
 	if err != nil {
 		return nil, fmt.Errorf("create device: %w", err)
 	}
@@ -238,6 +247,7 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 		})
 	}
 
+	committed = true
 	return outbound, nil
 }
 
@@ -354,11 +364,21 @@ func (w *Masque) run(ctx context.Context) error {
 
 // Close implements C.ProxyAdapter
 func (w *Masque) Close() error {
-	w.runCancel()
-	if w.tunDevice != nil {
-		w.tunDevice.Close()
+	if w == nil {
+		return nil
 	}
-	return nil
+	w.closeOnce.Do(func() {
+		if w.runCancel != nil {
+			w.runCancel()
+		}
+		if w.h2Transport != nil {
+			w.h2Transport.CloseIdleConnections()
+		}
+		if w.tunDevice != nil {
+			w.closeErr = errors.Join(w.closeErr, w.tunDevice.Close())
+		}
+	})
+	return w.closeErr
 }
 
 func (w *Masque) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn, err error) {
@@ -367,7 +387,7 @@ func (w *Masque) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Con
 		return nil, err
 	}
 	if !metadata.Resolved() || w.resolver != nil {
-		r := resolver.DefaultResolver
+		r := resolver.DefaultResolverValue()
 		if w.resolver != nil {
 			r = w.resolver
 		}
@@ -407,7 +427,7 @@ func (w *Masque) ListenPacketContext(ctx context.Context, metadata *C.Metadata) 
 
 func (w *Masque) ResolveUDP(ctx context.Context, metadata *C.Metadata) error {
 	if (!metadata.Resolved() || w.resolver != nil) && metadata.Host != "" {
-		r := resolver.DefaultResolver
+		r := resolver.DefaultResolverValue()
 		if w.resolver != nil {
 			r = w.resolver
 		}

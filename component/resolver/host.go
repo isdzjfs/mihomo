@@ -18,6 +18,12 @@ var (
 	UseSystemHosts        bool
 )
 
+func SetUseSystemHosts(enable bool) {
+	stateMu.Lock()
+	UseSystemHosts = enable
+	stateMu.Unlock()
+}
+
 type Hosts struct {
 	*trie.DomainTrie[HostValue]
 }
@@ -50,7 +56,10 @@ func (h *Hosts) Search(domain string, isDomain bool) (*HostValue, bool) {
 		return &hostValue, false
 	}
 
-	if !isDomain && !DisableSystemHosts && UseSystemHosts {
+	stateMu.RLock()
+	useSystemHosts := UseSystemHosts
+	stateMu.RUnlock()
+	if !isDomain && !DisableSystemHosts && useSystemHosts {
 		addr, _ := hosts.LookupStaticHost(domain)
 		if hostValue, err := NewHostValue(addr); err == nil {
 			return &hostValue, true

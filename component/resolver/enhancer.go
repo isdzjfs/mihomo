@@ -4,6 +4,18 @@ import "net/netip"
 
 var DefaultHostMapper Enhancer
 
+func SetDefaultHostMapper(mapper Enhancer) {
+	stateMu.Lock()
+	DefaultHostMapper = mapper
+	stateMu.Unlock()
+}
+
+func DefaultHostMapperValue() Enhancer {
+	stateMu.RLock()
+	defer stateMu.RUnlock()
+	return DefaultHostMapper
+}
+
 type Enhancer interface {
 	FakeIPEnabled() bool
 	MappingEnabled() bool
@@ -17,7 +29,7 @@ type Enhancer interface {
 }
 
 func FakeIPEnabled() bool {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		return mapper.FakeIPEnabled()
 	}
 
@@ -25,7 +37,7 @@ func FakeIPEnabled() bool {
 }
 
 func MappingEnabled() bool {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		return mapper.MappingEnabled()
 	}
 
@@ -33,7 +45,7 @@ func MappingEnabled() bool {
 }
 
 func IsFakeIP(ip netip.Addr) bool {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		return mapper.IsFakeIP(ip)
 	}
 
@@ -41,7 +53,7 @@ func IsFakeIP(ip netip.Addr) bool {
 }
 
 func IsFakeBroadcastIP(ip netip.Addr) bool {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		return mapper.IsFakeBroadcastIP(ip)
 	}
 
@@ -49,7 +61,7 @@ func IsFakeBroadcastIP(ip netip.Addr) bool {
 }
 
 func IsExistFakeIP(ip netip.Addr) bool {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		return mapper.IsExistFakeIP(ip)
 	}
 
@@ -57,13 +69,13 @@ func IsExistFakeIP(ip netip.Addr) bool {
 }
 
 func InsertHostByIP(ip netip.Addr, host string) {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		mapper.InsertHostByIP(ip, host)
 	}
 }
 
 func FindHostByIP(ip netip.Addr) (string, bool) {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		return mapper.FindHostByIP(ip)
 	}
 
@@ -71,14 +83,14 @@ func FindHostByIP(ip netip.Addr) (string, bool) {
 }
 
 func FlushFakeIP() error {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		return mapper.FlushFakeIP()
 	}
 	return nil
 }
 
 func StoreFakePoolState() {
-	if mapper := DefaultHostMapper; mapper != nil {
+	if mapper := DefaultHostMapperValue(); mapper != nil {
 		mapper.StoreFakePoolState()
 	}
 }

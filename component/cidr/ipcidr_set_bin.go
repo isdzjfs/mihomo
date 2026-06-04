@@ -3,11 +3,14 @@ package cidr
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 
 	"go4.org/netipx"
 )
+
+const maxIpCidrSetRanges = 4 * 1024 * 1024
 
 func (ss *IpCidrSet) WriteBin(w io.Writer) (err error) {
 	// version
@@ -56,6 +59,9 @@ func ReadIpCidrSet(r io.Reader) (ss *IpCidrSet, err error) {
 	}
 	if length < 1 {
 		return nil, errors.New("length is invalid")
+	}
+	if length > maxIpCidrSetRanges {
+		return nil, fmt.Errorf("range length %d exceeds maximum %d", length, maxIpCidrSetRanges)
 	}
 	ss.rr = make([]netipx.IPRange, length)
 	for i := int64(0); i < length; i++ {

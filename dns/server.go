@@ -2,7 +2,9 @@ package dns
 
 import (
 	"context"
+	"fmt"
 	"net"
+	"sync"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	"github.com/metacubex/mihomo/common/sockopt"
@@ -13,13 +15,15 @@ import (
 )
 
 var (
-	address string
-	server  = &Server{}
+	address  string
+	server   = &Server{}
+	serverMu sync.Mutex
 
 	dnsDefaultTTL uint32 = 600
 )
 
 type Server struct {
+	serviceMu sync.RWMutex
 	service   resolver.Service
 	tcpServer *D.Server
 	udpServer *D.Server
@@ -27,7 +31,16 @@ type Server struct {
 
 // ServeDNS implement D.Handler ServeDNS
 func (s *Server) ServeDNS(w D.ResponseWriter, r *D.Msg) {
-	msg, err := s.service.ServeMsg(context.Background(), r)
+	s.serviceMu.RLock()
+	service := s.service
+	s.serviceMu.RUnlock()
+	if service == nil {
+		m := new(D.Msg)
+		m.SetRcode(r, D.RcodeServerFailure)
+		w.WriteMsg(m)
+		return
+	}
+	msg, err := service.ServeMsg(context.Background(), r)
 	if err != nil {
 		m := new(D.Msg)
 		m.SetRcode(r, D.RcodeServerFailure)
@@ -40,30 +53,27 @@ func (s *Server) ServeDNS(w D.ResponseWriter, r *D.Msg) {
 }
 
 func (s *Server) SetService(service resolver.Service) {
+	s.serviceMu.Lock()
+	defer s.serviceMu.Unlock()
 	s.service = service
 }
 
-func ReCreateServer(addr string, service resolver.Service) {
+func ReCreateServer(addr string, service resolver.Service) error {
+	serverMu.Lock()
+	defer serverMu.Unlock()
+
 	if addr == address && service != nil {
 		server.SetService(service)
-		return
+		return nil
 	}
 
-	if server.tcpServer != nil {
-		_ = server.tcpServer.Shutdown()
-		server.tcpServer = nil
-	}
-
-	if server.udpServer != nil {
-		_ = server.udpServer.Shutdown()
-		server.udpServer = nil
-	}
-
-	server.service = nil
-	address = ""
+	oldServer := server
 
 	if addr == "" || service == nil {
-		return
+		server = &Server{}
+		address = ""
+		shutdownServer(oldServer)
+		return nil
 	}
 
 	var err error
@@ -74,39 +84,60 @@ func ReCreateServer(addr string, service resolver.Service) {
 	}()
 
 	_, port, err := net.SplitHostPort(addr)
-	if port == "0" || port == "" || err != nil {
-		return
+	if err != nil {
+		return fmt.Errorf("invalid DNS server listen address %s: %w", addr, err)
+	}
+	if port == "0" || port == "" {
+		server = &Server{}
+		address = ""
+		shutdownServer(oldServer)
+		return nil
+	}
+
+	p, err := inbound.ListenPacket("udp", addr)
+	if err != nil {
+		log.Errorln("Start DNS server(UDP) error: %s", err.Error())
+		return err
+	}
+
+	if err := sockopt.UDPReuseaddr(p); err != nil {
+		log.Warnln("Failed to Reuse UDP Address: %s", err)
+	}
+
+	l, err := inbound.Listen("tcp", addr)
+	if err != nil {
+		_ = p.Close()
+		log.Errorln("Start DNS server(TCP) error: %s", err.Error())
+		return err
 	}
 
 	address = addr
-	server = &Server{service: service}
+	newServer := &Server{service: service}
+	newServer.udpServer = &D.Server{Addr: addr, PacketConn: p, Handler: newServer}
+	newServer.tcpServer = &D.Server{Addr: addr, Listener: l, Handler: newServer}
+	server = newServer
+	shutdownServer(oldServer)
 
 	go func() {
-		p, err := inbound.ListenPacket("udp", addr)
-		if err != nil {
-			log.Errorln("Start DNS server(UDP) error: %s", err.Error())
-			return
-		}
-
-		if err := sockopt.UDPReuseaddr(p); err != nil {
-			log.Warnln("Failed to Reuse UDP Address: %s", err)
-		}
-
 		log.Infoln("DNS server(UDP) listening at: %s", p.LocalAddr().String())
-		server.udpServer = &D.Server{Addr: addr, PacketConn: p, Handler: server}
-		_ = server.udpServer.ActivateAndServe()
+		_ = newServer.udpServer.ActivateAndServe()
 	}()
 
 	go func() {
-		l, err := inbound.Listen("tcp", addr)
-		if err != nil {
-			log.Errorln("Start DNS server(TCP) error: %s", err.Error())
-			return
-		}
-
 		log.Infoln("DNS server(TCP) listening at: %s", l.Addr().String())
-		server.tcpServer = &D.Server{Addr: addr, Listener: l, Handler: server}
-		_ = server.tcpServer.ActivateAndServe()
+		_ = newServer.tcpServer.ActivateAndServe()
 	}()
+	return nil
+}
 
+func shutdownServer(server *Server) {
+	if server == nil {
+		return
+	}
+	if server.tcpServer != nil {
+		_ = server.tcpServer.Shutdown()
+	}
+	if server.udpServer != nil {
+		_ = server.udpServer.Shutdown()
+	}
 }

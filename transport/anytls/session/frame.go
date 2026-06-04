@@ -20,7 +20,8 @@ const ( // cmds
 )
 
 const (
-	headerOverHeadSize = 1 + 4 + 2
+	headerOverHeadSize  = 1 + 4 + 2
+	maxFramePayloadSize = 1<<16 - 1
 )
 
 // frame defines a packet from or to be multiplexed into a single connection

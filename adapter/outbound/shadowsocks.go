@@ -294,6 +294,14 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 	var kcptunClient *kcptun.Client
 	obfsMode := ""
 
+	switch option.UDPOverTCPVersion {
+	case uot.Version, uot.LegacyVersion:
+	case 0:
+		option.UDPOverTCPVersion = uot.LegacyVersion
+	default:
+		return nil, fmt.Errorf("ss %s unknown udp over tcp protocol version: %d", addr, option.UDPOverTCPVersion)
+	}
+
 	decoder := structure.NewDecoder(structure.Option{TagName: "obfs", WeaklyTypedInput: true})
 	if option.Plugin == "obfs" {
 		opts := simpleObfsOption{Host: "bing.com"}
@@ -440,13 +448,6 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 			KeepAlive:    kcptunOpt.KeepAlive,
 		})
 		option.UDPOverTCP = true // must open uot
-	}
-	switch option.UDPOverTCPVersion {
-	case uot.Version, uot.LegacyVersion:
-	case 0:
-		option.UDPOverTCPVersion = uot.LegacyVersion
-	default:
-		return nil, fmt.Errorf("ss %s unknown udp over tcp protocol version: %d", addr, option.UDPOverTCPVersion)
 	}
 
 	outbound := &ShadowSocks{

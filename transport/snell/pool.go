@@ -41,6 +41,11 @@ func (p *Pool) put(conn *Snell) {
 	p.pool.Put(conn)
 }
 
+func (p *Pool) Close() error {
+	p.pool.Close()
+	return nil
+}
+
 type PoolConn struct {
 	*Snell
 	pool           *Pool

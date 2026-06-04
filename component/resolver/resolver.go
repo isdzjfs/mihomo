@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
@@ -15,6 +16,8 @@ import (
 )
 
 var (
+	stateMu sync.RWMutex
+
 	// DefaultResolver aim to resolve ip
 	DefaultResolver Resolver
 
@@ -38,6 +41,67 @@ var (
 	DefaultDNSTimeout = time.Second * 5
 )
 
+func SetDefaultResolver(r Resolver) {
+	stateMu.Lock()
+	DefaultResolver = r
+	stateMu.Unlock()
+}
+
+func DefaultResolverValue() Resolver {
+	stateMu.RLock()
+	defer stateMu.RUnlock()
+	return DefaultResolver
+}
+
+func SetDisableIPv6(disable bool) {
+	stateMu.Lock()
+	DisableIPv6 = disable
+	stateMu.Unlock()
+}
+
+func DisableIPv6Value() bool {
+	stateMu.RLock()
+	defer stateMu.RUnlock()
+	return DisableIPv6
+}
+
+func SetProxyServerHostResolver(r Resolver) {
+	stateMu.Lock()
+	ProxyServerHostResolver = r
+	stateMu.Unlock()
+}
+
+func ProxyServerHostResolverValue() Resolver {
+	stateMu.RLock()
+	defer stateMu.RUnlock()
+	return ProxyServerHostResolver
+}
+
+func SetDirectHostResolver(r Resolver) {
+	stateMu.Lock()
+	DirectHostResolver = r
+	stateMu.Unlock()
+}
+
+func DirectHostResolverValue() Resolver {
+	stateMu.RLock()
+	defer stateMu.RUnlock()
+	return DirectHostResolver
+}
+
+func SetDefaultHosts(hosts Hosts) {
+	stateMu.Lock()
+	DefaultHosts = hosts
+	stateMu.Unlock()
+}
+
+func SearchDefaultHosts(host string, isDomain bool) (*HostValue, bool) {
+	stateMu.RLock()
+	hosts := DefaultHosts
+	stateMu.RUnlock()
+	return hosts.Search(host, isDomain)
+}
+
 var (
 	ErrIPNotFound   = errors.New("couldn't find ip")
 	ErrIPVersion    = errors.New("ip version error")
@@ -57,7 +121,7 @@ type Resolver interface {
 
 // LookupIPv4WithResolver same as LookupIPv4, but with a resolver
 func LookupIPv4WithResolver(ctx context.Context, host string, r Resolver) ([]netip.Addr, error) {
-	if node, ok := DefaultHosts.Search(host, false); ok {
+	if node, ok := SearchDefaultHosts(host, false); ok {
 		if addrs := utils.Filter(node.IPs, func(ip netip.Addr) bool {
 			return ip.Is4()
 		}); len(addrs) > 0 {
@@ -83,7 +147,7 @@ func LookupIPv4WithResolver(ctx context.Context, host string, r Resolver) ([]net
 
 // LookupIPv4 with a host, return ipv4 list
 func LookupIPv4(ctx context.Context, host string) ([]netip.Addr, error) {
-	return LookupIPv4WithResolver(ctx, host, DefaultResolver)
+	return LookupIPv4WithResolver(ctx, host, DefaultResolverValue())
 }
 
 // ResolveIPv4WithResolver same as ResolveIPv4, but with a resolver
@@ -99,16 +163,16 @@ func ResolveIPv4WithResolver(ctx context.Context, host string, r Resolver) (neti
 
 // ResolveIPv4 with a host, return ipv4
 func ResolveIPv4(ctx context.Context, host string) (netip.Addr, error) {
-	return ResolveIPv4WithResolver(ctx, host, DefaultResolver)
+	return ResolveIPv4WithResolver(ctx, host, DefaultResolverValue())
 }
 
 // LookupIPv6WithResolver same as LookupIPv6, but with a resolver
 func LookupIPv6WithResolver(ctx context.Context, host string, r Resolver) ([]netip.Addr, error) {
-	if DisableIPv6 {
+	if DisableIPv6Value() {
 		return nil, ErrIPv6Disabled
 	}
 
-	if node, ok := DefaultHosts.Search(host, false); ok {
+	if node, ok := SearchDefaultHosts(host, false); ok {
 		if addrs := utils.Filter(node.IPs, func(ip netip.Addr) bool {
 			return ip.Is6()
 		}); len(addrs) > 0 {
@@ -133,7 +197,7 @@ func LookupIPv6WithResolver(ctx context.Context, host string, r Resolver) ([]net
 
 // LookupIPv6 with a host, return ipv6 list
 func LookupIPv6(ctx context.Context, host string) ([]netip.Addr, error) {
-	return LookupIPv6WithResolver(ctx, host, DefaultResolver)
+	return LookupIPv6WithResolver(ctx, host, DefaultResolverValue())
 }
 
 // ResolveIPv6WithResolver same as ResolveIPv6, but with a resolver
@@ -148,21 +212,21 @@ func ResolveIPv6WithResolver(ctx context.Context, host string, r Resolver) (neti
 }
 
 func ResolveIPv6(ctx context.Context, host string) (netip.Addr, error) {
-	return ResolveIPv6WithResolver(ctx, host, DefaultResolver)
+	return ResolveIPv6WithResolver(ctx, host, DefaultResolverValue())
 }
 
 // LookupIPWithResolver same as LookupIP, but with a resolver
 func LookupIPWithResolver(ctx context.Context, host string, r Resolver) ([]netip.Addr, error) {
-	if node, ok := DefaultHosts.Search(host, false); ok {
+	if node, ok := SearchDefaultHosts(host, false); ok {
 		return node.IPs, nil
 	}
 
 	if r != nil && r.Invalid() {
-		if DisableIPv6 {
+		if DisableIPv6Value() {
 			return r.LookupIPv4(ctx, host)
 		}
 		return r.LookupIP(ctx, host)
-	} else if DisableIPv6 {
+	} else if DisableIPv6Value() {
 		return LookupIPv4WithResolver(ctx, host, r)
 	}
 
@@ -176,7 +240,7 @@ func LookupIPWithResolver(ctx context.Context, host string, r Resolver) ([]netip
 
 // LookupIP with a host, return ip
 func LookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
-	return LookupIPWithResolver(ctx, host, DefaultResolver)
+	return LookupIPWithResolver(ctx, host, DefaultResolverValue())
 }
 
 // ResolveIPWithResolver same as ResolveIP, but with a resolver
@@ -196,7 +260,7 @@ func ResolveIPWithResolver(ctx context.Context, host string, r Resolver) (netip.
 
 // ResolveIP with a host, return ip and priority return TypeA
 func ResolveIP(ctx context.Context, host string) (netip.Addr, error) {
-	return ResolveIPWithResolver(ctx, host, DefaultResolver)
+	return ResolveIPWithResolver(ctx, host, DefaultResolverValue())
 }
 
 // ResolveIPPrefer6WithResolver same as ResolveIP, but with a resolver
@@ -216,7 +280,7 @@ func ResolveIPPrefer6WithResolver(ctx context.Context, host string, r Resolver) 
 
 // ResolveIPPrefer6 with a host, return ip and priority return TypeAAAA
 func ResolveIPPrefer6(ctx context.Context, host string) (netip.Addr, error) {
-	return ResolveIPPrefer6WithResolver(ctx, host, DefaultResolver)
+	return ResolveIPPrefer6WithResolver(ctx, host, DefaultResolverValue())
 }
 
 func ResolveECHWithResolver(ctx context.Context, host string, r Resolver) ([]byte, error) {
@@ -227,19 +291,19 @@ func ResolveECHWithResolver(ctx context.Context, host string, r Resolver) ([]byt
 }
 
 func ResolveECH(ctx context.Context, host string) ([]byte, error) {
-	return ResolveECHWithResolver(ctx, host, DefaultResolver)
+	return ResolveECHWithResolver(ctx, host, DefaultResolverValue())
 }
 
 func ClearCache() {
-	if DefaultResolver != nil {
-		go DefaultResolver.ClearCache()
+	if r := DefaultResolverValue(); r != nil {
+		go r.ClearCache()
 	}
 	go SystemResolver.ClearCache() // SystemResolver unneeded check nil
 }
 
 func ResetConnection() {
-	if DefaultResolver != nil {
-		go DefaultResolver.ResetConnection()
+	if r := DefaultResolverValue(); r != nil {
+		go r.ResetConnection()
 	}
 	go SystemResolver.ResetConnection() // SystemResolver unneeded check nil
 }

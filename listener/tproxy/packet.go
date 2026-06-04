@@ -62,18 +62,24 @@ func createOrGetLocalConn(rAddr, lAddr netip.AddrPort, tunnel C.Tunnel, addition
 		cond, loaded := natTable.GetOrCreateLockForLocalConn(local, remote)
 		if loaded {
 			cond.L.Lock()
-			cond.Wait()
-			// we should get localConn here
-			localConn = natTable.GetForLocalConn(local, remote)
-			if localConn == nil {
-				return nil, fmt.Errorf("localConn is nil, nat entry not exist")
+			defer cond.L.Unlock()
+			for {
+				cond.Wait()
+				localConn = natTable.GetForLocalConn(local, remote)
+				if localConn != nil {
+					break
+				}
+				if !natTable.HasLockForLocalConn(local, remote) {
+					return nil, fmt.Errorf("localConn is nil, nat entry not exist")
+				}
 			}
-			cond.L.Unlock()
 		} else {
 			if cond == nil {
 				return nil, fmt.Errorf("cond is nil, nat entry not exist")
 			}
 			defer func() {
+				cond.L.Lock()
+				defer cond.L.Unlock()
 				natTable.DeleteLockForLocalConn(local, remote)
 				cond.Broadcast()
 			}()

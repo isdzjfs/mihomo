@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -82,7 +83,7 @@ func ParseWithBytes(buf []byte) (*config.Config, error) {
 }
 
 // ApplyConfig dispatch configure to all parts without ExternalController
-func ApplyConfig(cfg *config.Config, force bool) {
+func ApplyConfig(cfg *config.Config, force bool) error {
 	mux.Lock()
 	defer mux.Unlock()
 	log.SetLevel(cfg.General.LogLevel)
@@ -91,6 +92,12 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	}
 
 	tunnel.OnSuspend()
+	var applyErrs []error
+	appendErr := func(name string, err error) {
+		if err != nil {
+			applyErrs = append(applyErrs, fmt.Errorf("%s: %w", name, err))
+		}
+	}
 
 	ca.ResetCertificate()
 	for _, c := range cfg.TLS.CustomTrustCert {
@@ -107,18 +114,18 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateHosts(cfg.Hosts)
 	updateGeneral(cfg.General, true)
 	updateNTP(cfg.NTP)
-	updateDNS(cfg.DNS, cfg.General.IPv6)
-	updateListeners(cfg.General, cfg.Listeners, force)
-	updateTun(cfg.General) // tun should not care "force"
-	updateIPTables(cfg)
-	updateTunnels(cfg.Tunnels)
+	appendErr("DNS", updateDNS(cfg.DNS, cfg.General.IPv6))
+	appendErr("listeners", updateListeners(cfg.General, cfg.Listeners, force))
+	appendErr("TUN", updateTun(cfg.General)) // tun should not care "force"
+	appendErr("iptables", updateIPTables(cfg))
+	appendErr("tunnels", updateTunnels(cfg.Tunnels))
 
 	tunnel.OnInnerLoading()
 
 	initInnerTcp()
-	loadProvider(cfg.Providers)
+	appendErr("proxy providers", loadProvider(cfg.Providers))
 	updateProfile(cfg)
-	loadProvider(cfg.RuleProviders)
+	appendErr("rule providers", loadProvider(cfg.RuleProviders))
 	closeReplacedProviders(oldProviders, cfg.Providers)
 	closeReplacedProviders(oldRuleProviders, cfg.RuleProviders)
 	closeReplacedProxies(oldProxies, cfg.Proxies)
@@ -127,6 +134,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateUpdater(cfg)
 
 	resolver.ResetConnection()
+	return errors.Join(applyErrs...)
 }
 
 func initInnerTcp() {
@@ -163,7 +171,7 @@ func GetGeneral() *config.General {
 		Mode:         tunnel.Mode(),
 		UnifiedDelay: adapter.UnifiedDelay.Load(),
 		LogLevel:     log.Level(),
-		IPv6:         !resolver.DisableIPv6,
+		IPv6:         !resolver.DisableIPv6Value(),
 		Interface:    dialer.DefaultInterface.Load(),
 		RoutingMark:  int(dialer.DefaultRoutingMark.Load()),
 		GeoXUrl: config.GeoXUrl{
@@ -191,10 +199,17 @@ func GetGeneral() *config.General {
 	return general
 }
 
-func updateListeners(general *config.General, listeners map[string]C.InboundListener, force bool) {
-	listener.PatchInboundListeners(listeners, tunnel.Tunnel, true)
+func updateListeners(general *config.General, listeners map[string]C.InboundListener, force bool) error {
+	var errs []error
+	appendErr := func(name string, err error) {
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+		}
+	}
+
+	appendErr("inbound listeners", listener.PatchInboundListeners(listeners, tunnel.Tunnel, true))
 	if !force {
-		return
+		return errors.Join(errs...)
 	}
 
 	allowLan := general.AllowLan
@@ -205,18 +220,19 @@ func updateListeners(general *config.General, listeners map[string]C.InboundList
 
 	bindAddress := general.BindAddress
 	listener.SetBindAddress(bindAddress)
-	listener.ReCreateHTTP(general.Port, tunnel.Tunnel)
-	listener.ReCreateSocks(general.SocksPort, tunnel.Tunnel)
-	listener.ReCreateRedir(general.RedirPort, tunnel.Tunnel)
-	listener.ReCreateTProxy(general.TProxyPort, tunnel.Tunnel)
-	listener.ReCreateMixed(general.MixedPort, tunnel.Tunnel)
-	listener.ReCreateShadowSocks(general.ShadowSocksConfig, tunnel.Tunnel)
-	listener.ReCreateVmess(general.VmessConfig, tunnel.Tunnel)
-	listener.ReCreateTuic(general.TuicServer, tunnel.Tunnel)
+	appendErr("HTTP", listener.ReCreateHTTP(general.Port, tunnel.Tunnel))
+	appendErr("SOCKS", listener.ReCreateSocks(general.SocksPort, tunnel.Tunnel))
+	appendErr("redir", listener.ReCreateRedir(general.RedirPort, tunnel.Tunnel))
+	appendErr("TProxy", listener.ReCreateTProxy(general.TProxyPort, tunnel.Tunnel))
+	appendErr("mixed", listener.ReCreateMixed(general.MixedPort, tunnel.Tunnel))
+	appendErr("ShadowSocks", listener.ReCreateShadowSocks(general.ShadowSocksConfig, tunnel.Tunnel))
+	appendErr("Vmess", listener.ReCreateVmess(general.VmessConfig, tunnel.Tunnel))
+	appendErr("Tuic", listener.ReCreateTuic(general.TuicServer, tunnel.Tunnel))
+	return errors.Join(errs...)
 }
 
-func updateTun(general *config.General) {
-	listener.ReCreateTun(general.Tun, tunnel.Tunnel)
+func updateTun(general *config.General) error {
+	return listener.ReCreateTun(general.Tun, tunnel.Tunnel)
 }
 
 func updateExperimental(c *config.Experimental) {
@@ -243,15 +259,14 @@ func updateNTP(c *config.NTP) {
 	}
 }
 
-func updateDNS(c *config.DNS, generalIPv6 bool) {
+func updateDNS(c *config.DNS, generalIPv6 bool) error {
 	if !c.Enable {
-		resolver.DefaultResolver = nil
-		resolver.DefaultHostMapper = nil
-		resolver.DefaultService = nil
-		resolver.ProxyServerHostResolver = nil
-		resolver.DirectHostResolver = nil
-		dns.ReCreateServer("", nil)
-		return
+		resolver.SetDefaultResolver(nil)
+		resolver.SetDefaultHostMapper(nil)
+		resolver.SetDefaultService(nil)
+		resolver.SetProxyServerHostResolver(nil)
+		resolver.SetDirectHostResolver(nil)
+		return dns.ReCreateServer("", nil)
 	}
 
 	ipv6 := c.IPv6 && generalIPv6
@@ -282,34 +297,37 @@ func updateDNS(c *config.DNS, generalIPv6 bool) {
 	})
 
 	// reuse cache of old host mapper
-	if old := resolver.DefaultHostMapper; old != nil {
-		m.PatchFrom(old.(*dns.ResolverEnhancer))
+	if old, ok := resolver.DefaultHostMapperValue().(*dns.ResolverEnhancer); ok {
+		m.PatchFrom(old)
 	}
 
 	s := dns.NewService(r, m)
 
-	resolver.DefaultResolver = r
-	resolver.DefaultHostMapper = m
-	resolver.DefaultService = s
-	resolver.UseSystemHosts = c.UseSystemHosts
+	if err := dns.ReCreateServer(c.Listen, s); err != nil {
+		return err
+	}
+
+	resolver.SetDefaultResolver(r)
+	resolver.SetDefaultHostMapper(m)
+	resolver.SetDefaultService(s)
+	resolver.SetUseSystemHosts(c.UseSystemHosts)
 
 	if r.ProxyResolver.Invalid() {
-		resolver.ProxyServerHostResolver = r.ProxyResolver
+		resolver.SetProxyServerHostResolver(r.ProxyResolver)
 	} else {
-		resolver.ProxyServerHostResolver = r.Resolver
+		resolver.SetProxyServerHostResolver(r.Resolver)
 	}
 
 	if r.DirectResolver.Invalid() {
-		resolver.DirectHostResolver = r.DirectResolver
+		resolver.SetDirectHostResolver(r.DirectResolver)
 	} else {
-		resolver.DirectHostResolver = r.Resolver
+		resolver.SetDirectHostResolver(r.Resolver)
 	}
-
-	dns.ReCreateServer(c.Listen, s)
+	return nil
 }
 
 func updateHosts(tree *trie.DomainTrie[resolver.HostValue]) {
-	resolver.DefaultHosts = resolver.NewHosts(tree)
+	resolver.SetDefaultHosts(resolver.NewHosts(tree))
 }
 
 func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) (map[string]C.Proxy, map[string]P.ProxyProvider) {
@@ -355,7 +373,9 @@ func closeReplacedProxies(oldProxies map[string]C.Proxy, currentProxies map[stri
 	}
 }
 
-func loadProvider[T P.Provider](providers map[string]T) {
+func loadProvider[T P.Provider](providers map[string]T) error {
+	var errs []error
+	errMux := sync.Mutex{}
 	load := func(pv T) {
 		name := pv.Name()
 		if pv.VehicleType() == P.Compatible {
@@ -375,6 +395,9 @@ func loadProvider[T P.Provider](providers map[string]T) {
 					log.Errorln("initial rule provider %s error: %v", name, err)
 				}
 			}
+			errMux.Lock()
+			errs = append(errs, fmt.Errorf("%s: %w", name, err))
+			errMux.Unlock()
 		}
 	}
 
@@ -390,6 +413,7 @@ func loadProvider[T P.Provider](providers map[string]T) {
 		}()
 	}
 	wg.Wait()
+	return errors.Join(errs...)
 }
 
 func updateSniffer(snifferConfig *sniffer.Config) {
@@ -407,8 +431,8 @@ func updateSniffer(snifferConfig *sniffer.Config) {
 	}
 }
 
-func updateTunnels(tunnels []LC.Tunnel) {
-	listener.PatchTunnel(tunnels, tunnel.Tunnel)
+func updateTunnels(tunnels []LC.Tunnel) error {
+	return listener.PatchTunnel(tunnels, tunnel.Tunnel)
 }
 
 func updateUpdater(cfg *config.Config) {
@@ -433,7 +457,7 @@ func temporaryUpdateGeneral(general *config.General) func() {
 func updateGeneral(general *config.General, logging bool) {
 	tunnel.SetMode(general.Mode)
 	tunnel.SetFindProcessMode(general.FindProcessMode)
-	resolver.DisableIPv6 = !general.IPv6
+	resolver.SetDisableIPv6(!general.IPv6)
 
 	dialer.SetTcpConcurrent(general.TCPConcurrent)
 	if logging && general.TCPConcurrent {
@@ -511,25 +535,18 @@ func patchSelectGroup(proxies map[string]C.Proxy) {
 	}
 }
 
-func updateIPTables(cfg *config.Config) {
-	tproxy.CleanupTProxyIPTables()
-
+func updateIPTables(cfg *config.Config) error {
 	iptables := cfg.IPTables
-	if runtime.GOOS != "linux" || !iptables.Enable {
-		return
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	if !iptables.Enable {
+		tproxy.CleanupTProxyIPTables()
+		return nil
 	}
 
-	var err error
-	defer func() {
-		if err != nil {
-			log.Errorln("[IPTABLES] setting iptables failed: %s", err.Error())
-			os.Exit(2)
-		}
-	}()
-
 	if cfg.General.Tun.Enable {
-		err = fmt.Errorf("when tun is enabled, iptables cannot be set automatically")
-		return
+		return fmt.Errorf("when tun is enabled, iptables cannot be set automatically")
 	}
 
 	var (
@@ -543,35 +560,34 @@ func updateIPTables(cfg *config.Config) {
 	)
 
 	if tProxyPort == 0 {
-		err = fmt.Errorf("tproxy-port must be greater than zero")
-		return
+		return fmt.Errorf("tproxy-port must be greater than zero")
 	}
 
 	if DnsRedirect {
 		if !dnsCfg.Enable {
-			err = fmt.Errorf("DNS server must be enable")
-			return
+			return fmt.Errorf("DNS server must be enable")
 		}
 
-		dnsPort, err = netip.ParseAddrPort(dnsCfg.Listen)
+		parsedDNSPort, err := netip.ParseAddrPort(dnsCfg.Listen)
 		if err != nil {
-			err = fmt.Errorf("DNS server must be correct")
-			return
+			return fmt.Errorf("DNS server must be correct: %w", err)
 		}
+		dnsPort = parsedDNSPort
 	}
 
 	if iptables.InboundInterface != "" {
 		inboundInterface = iptables.InboundInterface
 	}
 
+	tproxy.CleanupTProxyIPTables()
 	dialer.DefaultRoutingMark.CompareAndSwap(0, 2158)
-
-	err = tproxy.SetTProxyIPTables(inboundInterface, bypass, uint16(tProxyPort), DnsRedirect, dnsPort.Port())
-	if err != nil {
-		return
+	if err := tproxy.SetTProxyIPTables(inboundInterface, bypass, uint16(tProxyPort), DnsRedirect, dnsPort.Port()); err != nil {
+		log.Errorln("[IPTABLES] setting iptables failed: %s", err.Error())
+		return err
 	}
 
 	log.Infoln("[IPTABLES] Setting iptables completed")
+	return nil
 }
 
 func Shutdown() {

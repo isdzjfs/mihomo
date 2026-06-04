@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
@@ -30,6 +31,9 @@ type Fetcher[V any] struct {
 	onUpdate     func(V)
 	watcher      *fswatch.Watcher
 	loadBufMutex sync.Mutex
+	lifecycleMu  sync.Mutex
+	updateWG     sync.WaitGroup
+	closed       atomic.Bool
 	backoff      slowdown.Backoff
 }
 
@@ -46,6 +50,8 @@ func (f *Fetcher[V]) VehicleType() P.VehicleType {
 }
 
 func (f *Fetcher[V]) UpdatedAt() time.Time {
+	f.loadBufMutex.Lock()
+	defer f.loadBufMutex.Unlock()
 	return f.updatedAt
 }
 
@@ -55,7 +61,9 @@ func (f *Fetcher[V]) Initial() (V, error) {
 		buf, err := os.ReadFile(f.vehicle.Path())
 		modTime := stat.ModTime()
 		contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), false)
+		f.loadBufMutex.Lock()
 		f.updatedAt = modTime // reset updatedAt to file's modTime
+		f.loadBufMutex.Unlock()
 
 		if err == nil {
 			err = f.startPullLoop(time.Since(modTime) > f.interval)
@@ -83,7 +91,11 @@ func (f *Fetcher[V]) Initial() (V, error) {
 }
 
 func (f *Fetcher[V]) Update() (V, bool, error) {
-	buf, hash, err := f.vehicle.Read(f.ctx, f.hash)
+	f.loadBufMutex.Lock()
+	oldHash := f.hash
+	f.loadBufMutex.Unlock()
+
+	buf, hash, err := f.vehicle.Read(f.ctx, oldHash)
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
 		return lo.Empty[V](), false, err
@@ -95,7 +107,26 @@ func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
 	return f.loadBuf(buf, utils.MakeHash(buf), true)
 }
 
+func (f *Fetcher[V]) beginUpdate() bool {
+	f.lifecycleMu.Lock()
+	defer f.lifecycleMu.Unlock()
+	if f.closed.Load() {
+		return false
+	}
+	f.updateWG.Add(1)
+	return true
+}
+
+func (f *Fetcher[V]) endUpdate() {
+	f.updateWG.Done()
+}
+
 func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (V, bool, error) {
+	if !f.beginUpdate() {
+		return lo.Empty[V](), true, context.Canceled
+	}
+	defer f.endUpdate()
+
 	f.loadBufMutex.Lock()
 	defer f.loadBufMutex.Unlock()
 
@@ -128,7 +159,7 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 	f.updatedAt = now
 	f.hash = hash
 
-	if f.onUpdate != nil {
+	if f.onUpdate != nil && !f.closed.Load() {
 		f.onUpdate(contents)
 	}
 
@@ -136,15 +167,23 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 }
 
 func (f *Fetcher[V]) Close() error {
+	f.lifecycleMu.Lock()
+	if f.closed.Swap(true) {
+		f.lifecycleMu.Unlock()
+		return nil
+	}
+	f.lifecycleMu.Unlock()
+
 	f.ctxCancel()
 	if f.watcher != nil {
 		_ = f.watcher.Close()
 	}
+	f.updateWG.Wait()
 	return nil
 }
 
 func (f *Fetcher[V]) pullLoop(forceUpdate bool) {
-	initialInterval := f.interval - time.Since(f.updatedAt)
+	initialInterval := f.interval - time.Since(f.UpdatedAt())
 	if initialInterval > f.interval {
 		initialInterval = f.interval
 	}
@@ -209,6 +248,9 @@ func (f *Fetcher[V]) updateCallback(path string) {
 }
 
 func (f *Fetcher[V]) updateWithLog() {
+	if f.closed.Load() {
+		return
+	}
 	_, same, err := f.Update()
 	if err != nil {
 		log.Errorln("[Provider] %s pull error: %s", f.Name(), err.Error())

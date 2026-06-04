@@ -2,9 +2,13 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"runtime"
+	"sync"
 	"time"
 )
+
+var ErrClosed = errors.New("pool closed")
 
 type Factory[T any] func(context.Context) (T, error)
 
@@ -42,18 +46,27 @@ type Pool[T any] struct {
 }
 
 type pool[T any] struct {
+	mu      sync.Mutex
 	ch      chan *entry[T]
 	factory Factory[T]
 	evict   func(T)
 	maxAge  int64
+	closed  bool
 }
 
 func (p *pool[T]) GetContext(ctx context.Context) (T, error) {
 	now := time.Now()
 	for {
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			var zero T
+			return zero, ErrClosed
+		}
 		select {
 		case item := <-p.ch:
 			elm := item
+			p.mu.Unlock()
 			if p.maxAge != 0 && now.Sub(item.time).Milliseconds() > p.maxAge {
 				if p.evict != nil {
 					p.evict(elm.elm)
@@ -63,7 +76,22 @@ func (p *pool[T]) GetContext(ctx context.Context) (T, error) {
 
 			return elm.elm, nil
 		default:
-			return p.factory(ctx)
+			p.mu.Unlock()
+			item, err := p.factory(ctx)
+			if err != nil {
+				return item, err
+			}
+			p.mu.Lock()
+			if p.closed {
+				p.mu.Unlock()
+				if p.evict != nil {
+					p.evict(item)
+				}
+				var zero T
+				return zero, ErrClosed
+			}
+			p.mu.Unlock()
+			return item, nil
 		}
 	}
 }
@@ -73,6 +101,15 @@ func (p *pool[T]) Get() (T, error) {
 }
 
 func (p *pool[T]) Put(item T) {
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		if p.evict != nil {
+			p.evict(item)
+		}
+		return
+	}
+
 	e := &entry[T]{
 		elm:  item,
 		time: time.Now(),
@@ -80,8 +117,10 @@ func (p *pool[T]) Put(item T) {
 
 	select {
 	case p.ch <- e:
+		p.mu.Unlock()
 		return
 	default:
+		p.mu.Unlock()
 		// pool is full
 		if p.evict != nil {
 			p.evict(item)
@@ -90,12 +129,32 @@ func (p *pool[T]) Put(item T) {
 	}
 }
 
-func recycle[T any](p *Pool[T]) {
-	for item := range p.pool.ch {
-		if p.pool.evict != nil {
-			p.pool.evict(item.elm)
+func (p *Pool[T]) Close() {
+	p.pool.mu.Lock()
+	if p.pool.closed {
+		p.pool.mu.Unlock()
+		return
+	}
+	p.pool.closed = true
+	items := make([]T, 0, len(p.pool.ch))
+	for {
+		select {
+		case item := <-p.pool.ch:
+			items = append(items, item.elm)
+		default:
+			p.pool.mu.Unlock()
+			for _, item := range items {
+				if p.pool.evict != nil {
+					p.pool.evict(item)
+				}
+			}
+			return
 		}
 	}
+}
+
+func recycle[T any](p *Pool[T]) {
+	p.Close()
 }
 
 func New[T any](factory Factory[T], options ...Option[T]) *Pool[T] {

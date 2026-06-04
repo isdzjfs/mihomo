@@ -7,6 +7,8 @@ import (
 	"io"
 )
 
+const maxAddonFieldLength = 64 * 1024
+
 func ReadAddons(data []byte) (*Addons, error) {
 	reader := bytes.NewReader(data)
 	var addons Addons
@@ -39,6 +41,12 @@ func ReadAddons(data []byte) (*Addons, error) {
 			bytesLen, err = binary.ReadUvarint(reader)
 			if err != nil {
 				return nil, err
+			}
+			if bytesLen > maxAddonFieldLength {
+				return nil, fmt.Errorf("protobuf LEN field too large: %d", bytesLen)
+			}
+			if bytesLen > uint64(reader.Len()) {
+				return nil, io.ErrUnexpectedEOF
 			}
 			bytesData := make([]byte, bytesLen)
 			_, err = io.ReadFull(reader, bytesData)

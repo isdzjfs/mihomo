@@ -1,6 +1,7 @@
 package listener
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -103,7 +104,7 @@ func SetBindAddress(host string) {
 	bindAddress = host
 }
 
-func ReCreateHTTP(port int, tunnel C.Tunnel) {
+func ReCreateHTTP(port int, tunnel C.Tunnel) error {
 	httpMux.Lock()
 	defer httpMux.Unlock()
 
@@ -116,28 +117,33 @@ func ReCreateHTTP(port int, tunnel C.Tunnel) {
 
 	addr := genAddr(bindAddress, port, allowLan)
 
-	if httpListener != nil {
-		if httpListener.RawAddress() == addr {
-			return
-		}
-		httpListener.Close()
-		httpListener = nil
+	oldListener := httpListener
+	if oldListener != nil && oldListener.RawAddress() == addr {
+		return nil
 	}
 
 	if portIsZero(addr) {
-		return
+		if oldListener != nil {
+			_ = oldListener.Close()
+			httpListener = nil
+		}
+		return nil
 	}
 
-	httpListener, err = http.New(addr, tunnel)
+	newListener, err := http.New(addr, tunnel)
 	if err != nil {
-		log.Errorln("Start HTTP server error: %s", err.Error())
-		return
+		return err
+	}
+	httpListener = newListener
+	if oldListener != nil {
+		_ = oldListener.Close()
 	}
 
 	log.Infoln("HTTP proxy listening at: %s", httpListener.Address())
+	return nil
 }
 
-func ReCreateSocks(port int, tunnel C.Tunnel) {
+func ReCreateSocks(port int, tunnel C.Tunnel) error {
 	socksMux.Lock()
 	defer socksMux.Unlock()
 
@@ -152,51 +158,70 @@ func ReCreateSocks(port int, tunnel C.Tunnel) {
 
 	shouldTCPIgnore := false
 	shouldUDPIgnore := false
+	oldTCPListener := socksListener
+	oldUDPListener := socksUDPListener
 
-	if socksListener != nil {
-		if socksListener.RawAddress() != addr {
-			socksListener.Close()
-			socksListener = nil
-		} else {
+	if oldTCPListener != nil {
+		if oldTCPListener.RawAddress() == addr {
 			shouldTCPIgnore = true
 		}
 	}
 
-	if socksUDPListener != nil {
-		if socksUDPListener.RawAddress() != addr {
-			socksUDPListener.Close()
-			socksUDPListener = nil
-		} else {
+	if oldUDPListener != nil {
+		if oldUDPListener.RawAddress() == addr {
 			shouldUDPIgnore = true
 		}
 	}
 
 	if shouldTCPIgnore && shouldUDPIgnore {
-		return
+		return nil
 	}
 
 	if portIsZero(addr) {
-		return
+		if oldTCPListener != nil {
+			_ = oldTCPListener.Close()
+			socksListener = nil
+		}
+		if oldUDPListener != nil {
+			_ = oldUDPListener.Close()
+			socksUDPListener = nil
+		}
+		return nil
 	}
 
-	tcpListener, err := socks.New(addr, tunnel)
-	if err != nil {
-		return
+	tcpListener := oldTCPListener
+	if !shouldTCPIgnore {
+		tcpListener, err = socks.New(addr, tunnel)
+		if err != nil {
+			return err
+		}
 	}
 
-	udpListener, err := socks.NewUDP(addr, tunnel)
-	if err != nil {
-		tcpListener.Close()
-		return
+	udpListener := oldUDPListener
+	if !shouldUDPIgnore {
+		udpListener, err = socks.NewUDP(addr, tunnel)
+		if err != nil {
+			if !shouldTCPIgnore {
+				_ = tcpListener.Close()
+			}
+			return err
+		}
 	}
 
 	socksListener = tcpListener
 	socksUDPListener = udpListener
+	if !shouldTCPIgnore && oldTCPListener != nil {
+		_ = oldTCPListener.Close()
+	}
+	if !shouldUDPIgnore && oldUDPListener != nil {
+		_ = oldUDPListener.Close()
+	}
 
 	log.Infoln("SOCKS proxy listening at: %s", socksListener.Address())
+	return nil
 }
 
-func ReCreateRedir(port int, tunnel C.Tunnel) {
+func ReCreateRedir(port int, tunnel C.Tunnel) error {
 	redirMux.Lock()
 	defer redirMux.Unlock()
 
@@ -209,40 +234,64 @@ func ReCreateRedir(port int, tunnel C.Tunnel) {
 
 	addr := genAddr(bindAddress, port, allowLan)
 
-	if redirListener != nil {
-		if redirListener.RawAddress() == addr {
-			return
-		}
-		redirListener.Close()
-		redirListener = nil
-	}
+	oldTCPListener := redirListener
+	oldUDPListener := redirUDPListener
+	shouldTCPIgnore := oldTCPListener != nil && oldTCPListener.RawAddress() == addr
+	shouldUDPIgnore := oldUDPListener != nil && oldUDPListener.RawAddress() == addr
 
-	if redirUDPListener != nil {
-		if redirUDPListener.RawAddress() == addr {
-			return
-		}
-		redirUDPListener.Close()
-		redirUDPListener = nil
+	if shouldTCPIgnore && shouldUDPIgnore {
+		return nil
 	}
 
 	if portIsZero(addr) {
-		return
+		if oldTCPListener != nil {
+			_ = oldTCPListener.Close()
+			redirListener = nil
+		}
+		if oldUDPListener != nil {
+			_ = oldUDPListener.Close()
+			redirUDPListener = nil
+		}
+		return nil
 	}
 
-	redirListener, err = redir.New(addr, tunnel)
-	if err != nil {
-		return
+	tcpListener := oldTCPListener
+	if !shouldTCPIgnore {
+		tcpListener, err = redir.New(addr, tunnel)
+		if err != nil {
+			return err
+		}
 	}
 
-	redirUDPListener, err = tproxy.NewUDP(addr, tunnel)
-	if err != nil {
-		log.Warnln("Failed to start Redir UDP Listener: %s", err)
+	udpListener := oldUDPListener
+	if !shouldUDPIgnore {
+		udpListener, err = tproxy.NewUDP(addr, tunnel)
+		if err != nil {
+			if !shouldTCPIgnore {
+				_ = tcpListener.Close()
+			}
+			return err
+		}
+	}
+
+	redirListener = tcpListener
+	redirUDPListener = udpListener
+	if !shouldTCPIgnore && oldTCPListener != nil {
+		_ = oldTCPListener.Close()
+	}
+	if !shouldUDPIgnore && oldUDPListener != nil {
+		_ = oldUDPListener.Close()
+	}
+
+	if redirListener == nil {
+		return nil
 	}
 
 	log.Infoln("Redirect proxy listening at: %s", redirListener.Address())
+	return nil
 }
 
-func ReCreateShadowSocks(shadowSocksConfig string, tunnel C.Tunnel) {
+func ReCreateShadowSocks(shadowSocksConfig string, tunnel C.Tunnel) error {
 	ssMux.Lock()
 	defer ssMux.Unlock()
 
@@ -266,37 +315,42 @@ func ReCreateShadowSocks(shadowSocksConfig string, tunnel C.Tunnel) {
 
 	shouldIgnore := false
 
-	if shadowSocksListener != nil {
-		if shadowSocksListener.Config() != ssConfig.String() {
-			shadowSocksListener.Close()
-			shadowSocksListener = nil
-		} else {
+	oldListener := shadowSocksListener
+	if oldListener != nil {
+		if oldListener.Config() == ssConfig.String() {
 			shouldIgnore = true
 		}
 	}
 
 	if shouldIgnore {
-		return
+		return nil
 	}
 
 	if !ssConfig.Enable {
-		return
+		if oldListener != nil {
+			_ = oldListener.Close()
+			shadowSocksListener = nil
+		}
+		return nil
 	}
 
 	listener, err := sing_shadowsocks.New(ssConfig, tunnel)
 	if err != nil {
-		return
+		return err
 	}
 
 	shadowSocksListener = listener
+	if oldListener != nil {
+		_ = oldListener.Close()
+	}
 
 	for _, addr := range shadowSocksListener.AddrList() {
 		log.Infoln("ShadowSocks proxy listening at: %s", addr.String())
 	}
-	return
+	return nil
 }
 
-func ReCreateVmess(vmessConfig string, tunnel C.Tunnel) {
+func ReCreateVmess(vmessConfig string, tunnel C.Tunnel) error {
 	vmessMux.Lock()
 	defer vmessMux.Unlock()
 
@@ -318,42 +372,44 @@ func ReCreateVmess(vmessConfig string, tunnel C.Tunnel) {
 
 	shouldIgnore := false
 
-	if vmessListener != nil {
-		if vmessListener.Config() != vsConfig.String() {
-			vmessListener.Close()
-			vmessListener = nil
-		} else {
+	oldListener := vmessListener
+	if oldListener != nil {
+		if oldListener.Config() == vsConfig.String() {
 			shouldIgnore = true
 		}
 	}
 
 	if shouldIgnore {
-		return
+		return nil
 	}
 
 	if !vsConfig.Enable {
-		return
+		if oldListener != nil {
+			_ = oldListener.Close()
+			vmessListener = nil
+		}
+		return nil
 	}
 
 	listener, err := sing_vmess.New(vsConfig, tunnel)
 	if err != nil {
-		return
+		return err
 	}
 
 	vmessListener = listener
+	if oldListener != nil {
+		_ = oldListener.Close()
+	}
 
 	for _, addr := range vmessListener.AddrList() {
 		log.Infoln("Vmess proxy listening at: %s", addr.String())
 	}
-	return
+	return nil
 }
 
-func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) {
+func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) error {
 	tuicMux.Lock()
-	defer func() {
-		LastTuicConf = config
-		tuicMux.Unlock()
-	}()
+	defer tuicMux.Unlock()
 	shouldIgnore := false
 
 	var err error
@@ -363,37 +419,44 @@ func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) {
 		}
 	}()
 
-	if tuicListener != nil {
-		if tuicListener.Config().String() != config.String() {
-			tuicListener.Close()
-			tuicListener = nil
-		} else {
+	oldListener := tuicListener
+	if oldListener != nil {
+		if oldListener.Config().String() == config.String() {
 			shouldIgnore = true
 		}
 	}
 
 	if shouldIgnore {
-		return
+		return nil
 	}
 
 	if !config.Enable {
-		return
+		if oldListener != nil {
+			_ = oldListener.Close()
+			tuicListener = nil
+		}
+		LastTuicConf = config
+		return nil
 	}
 
 	listener, err := tuic.New(config, tunnel)
 	if err != nil {
-		return
+		return err
 	}
 
 	tuicListener = listener
+	LastTuicConf = config
+	if oldListener != nil {
+		_ = oldListener.Close()
+	}
 
 	for _, addr := range tuicListener.AddrList() {
 		log.Infoln("Tuic proxy listening at: %s", addr.String())
 	}
-	return
+	return nil
 }
 
-func ReCreateTProxy(port int, tunnel C.Tunnel) {
+func ReCreateTProxy(port int, tunnel C.Tunnel) error {
 	tproxyMux.Lock()
 	defer tproxyMux.Unlock()
 
@@ -406,40 +469,64 @@ func ReCreateTProxy(port int, tunnel C.Tunnel) {
 
 	addr := genAddr(bindAddress, port, allowLan)
 
-	if tproxyListener != nil {
-		if tproxyListener.RawAddress() == addr {
-			return
-		}
-		tproxyListener.Close()
-		tproxyListener = nil
-	}
+	oldTCPListener := tproxyListener
+	oldUDPListener := tproxyUDPListener
+	shouldTCPIgnore := oldTCPListener != nil && oldTCPListener.RawAddress() == addr
+	shouldUDPIgnore := oldUDPListener != nil && oldUDPListener.RawAddress() == addr
 
-	if tproxyUDPListener != nil {
-		if tproxyUDPListener.RawAddress() == addr {
-			return
-		}
-		tproxyUDPListener.Close()
-		tproxyUDPListener = nil
+	if shouldTCPIgnore && shouldUDPIgnore {
+		return nil
 	}
 
 	if portIsZero(addr) {
-		return
+		if oldTCPListener != nil {
+			_ = oldTCPListener.Close()
+			tproxyListener = nil
+		}
+		if oldUDPListener != nil {
+			_ = oldUDPListener.Close()
+			tproxyUDPListener = nil
+		}
+		return nil
 	}
 
-	tproxyListener, err = tproxy.New(addr, tunnel)
-	if err != nil {
-		return
+	tcpListener := oldTCPListener
+	if !shouldTCPIgnore {
+		tcpListener, err = tproxy.New(addr, tunnel)
+		if err != nil {
+			return err
+		}
 	}
 
-	tproxyUDPListener, err = tproxy.NewUDP(addr, tunnel)
-	if err != nil {
-		log.Warnln("Failed to start TProxy UDP Listener: %s", err)
+	udpListener := oldUDPListener
+	if !shouldUDPIgnore {
+		udpListener, err = tproxy.NewUDP(addr, tunnel)
+		if err != nil {
+			if !shouldTCPIgnore {
+				_ = tcpListener.Close()
+			}
+			return err
+		}
+	}
+
+	tproxyListener = tcpListener
+	tproxyUDPListener = udpListener
+	if !shouldTCPIgnore && oldTCPListener != nil {
+		_ = oldTCPListener.Close()
+	}
+	if !shouldUDPIgnore && oldUDPListener != nil {
+		_ = oldUDPListener.Close()
+	}
+
+	if tproxyListener == nil {
+		return nil
 	}
 
 	log.Infoln("TProxy server listening at: %s", tproxyListener.Address())
+	return nil
 }
 
-func ReCreateMixed(port int, tunnel C.Tunnel) {
+func ReCreateMixed(port int, tunnel C.Tunnel) error {
 	mixedMux.Lock()
 	defer mixedMux.Unlock()
 
@@ -454,86 +541,111 @@ func ReCreateMixed(port int, tunnel C.Tunnel) {
 
 	shouldTCPIgnore := false
 	shouldUDPIgnore := false
+	oldTCPListener := mixedListener
+	oldUDPListener := mixedUDPLister
 
-	if mixedListener != nil {
-		if mixedListener.RawAddress() != addr {
-			mixedListener.Close()
-			mixedListener = nil
-		} else {
+	if oldTCPListener != nil {
+		if oldTCPListener.RawAddress() == addr {
 			shouldTCPIgnore = true
 		}
 	}
-	if mixedUDPLister != nil {
-		if mixedUDPLister.RawAddress() != addr {
-			mixedUDPLister.Close()
-			mixedUDPLister = nil
-		} else {
+	if oldUDPListener != nil {
+		if oldUDPListener.RawAddress() == addr {
 			shouldUDPIgnore = true
 		}
 	}
 
 	if shouldTCPIgnore && shouldUDPIgnore {
-		return
+		return nil
 	}
 
 	if portIsZero(addr) {
-		return
+		if oldTCPListener != nil {
+			_ = oldTCPListener.Close()
+			mixedListener = nil
+		}
+		if oldUDPListener != nil {
+			_ = oldUDPListener.Close()
+			mixedUDPLister = nil
+		}
+		return nil
 	}
 
-	mixedListener, err = mixed.New(addr, tunnel)
-	if err != nil {
-		return
+	tcpListener := oldTCPListener
+	if !shouldTCPIgnore {
+		tcpListener, err = mixed.New(addr, tunnel)
+		if err != nil {
+			return err
+		}
 	}
 
-	mixedUDPLister, err = socks.NewUDP(addr, tunnel)
-	if err != nil {
-		mixedListener.Close()
-		return
+	udpListener := oldUDPListener
+	if !shouldUDPIgnore {
+		udpListener, err = socks.NewUDP(addr, tunnel)
+		if err != nil {
+			if !shouldTCPIgnore {
+				_ = tcpListener.Close()
+			}
+			return err
+		}
+	}
+
+	mixedListener = tcpListener
+	mixedUDPLister = udpListener
+	if !shouldTCPIgnore && oldTCPListener != nil {
+		_ = oldTCPListener.Close()
+	}
+	if !shouldUDPIgnore && oldUDPListener != nil {
+		_ = oldUDPListener.Close()
 	}
 
 	log.Infoln("Mixed(http+socks) proxy listening at: %s", mixedListener.Address())
+	return nil
 }
 
-func ReCreateTun(tunConf LC.Tun, tunnel C.Tunnel) {
+func ReCreateTun(tunConf LC.Tun, tunnel C.Tunnel) error {
 	tunConf.Sort()
 
 	tunMux.Lock()
-	defer func() {
-		LastTunConf = tunConf
-		tunMux.Unlock()
-	}()
+	defer tunMux.Unlock()
 
 	var err error
 	defer func() {
 		if err != nil {
 			log.Errorln("Start TUN listening error: %s", err.Error())
-			tunConf.Enable = false
 		}
 	}()
 
-	if tunConf.Equal(LastTunConf) {
+	if tunConf.Equal(LastTunConf) && (tunLister != nil || !tunConf.Enable) {
 		if tunLister != nil { // some default value in dialer maybe changed when config reload, reset at here
 			tunLister.OnReload()
 		}
-		return
+		return nil
 	}
-
-	closeTunListener()
 
 	if !tunConf.Enable {
-		return
+		closeTunListener()
+		LastTunConf = tunConf
+		return nil
 	}
 
+	oldListener := tunLister
+	// Build the replacement before closing the current TUN so setup failures keep the old adapter alive.
 	lister, err := sing_tun.New(tunConf, tunnel)
 	if err != nil {
-		return
+		return err
 	}
 	tunLister = lister
+	LastTunConf = tunConf
+	if oldListener != nil {
+		_ = oldListener.Close()
+	}
 
 	log.Infoln("[TUN] Tun adapter listening at: %s", tunLister.Address())
+	return nil
 }
 
-func PatchTunnel(tunnels []LC.Tunnel, tunnel C.Tunnel) {
+func PatchTunnel(tunnels []LC.Tunnel, tunnel C.Tunnel) error {
 	tunnelMux.Lock()
 	defer tunnelMux.Unlock()
 
@@ -589,6 +701,43 @@ func PatchTunnel(tunnels []LC.Tunnel, tunnel C.Tunnel) {
 
 	needClose, needCreate := lo.Difference(oldElm, newElm)
 
+	createdTCP := map[string]*LT.Listener{}
+	createdUDP := map[string]*LT.PacketConn{}
+	createdTCPMeta := map[string]addrProxy{}
+	createdUDPMeta := map[string]addrProxy{}
+	var errs []error
+	for _, elm := range needCreate {
+		key := fmt.Sprintf("%s/%s/%s", elm.addr, elm.target, elm.proxy)
+		if elm.network == "tcp" {
+			l, err := LT.New(elm.addr, elm.target, elm.proxy, tunnel)
+			if err != nil {
+				log.Errorln("Start tunnel %s error: %s", elm.target, err.Error())
+				errs = append(errs, err)
+				continue
+			}
+			createdTCP[key] = l
+			createdTCPMeta[key] = elm
+		} else {
+			l, err := LT.NewUDP(elm.addr, elm.target, elm.proxy, tunnel)
+			if err != nil {
+				log.Errorln("Start tunnel %s error: %s", elm.target, err.Error())
+				errs = append(errs, err)
+				continue
+			}
+			createdUDP[key] = l
+			createdUDPMeta[key] = elm
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		for _, listener := range createdTCP {
+			_ = listener.Close()
+		}
+		for _, listener := range createdUDP {
+			_ = listener.Close()
+		}
+		return err
+	}
+
 	for _, elm := range needClose {
 		key := fmt.Sprintf("%s/%s/%s", elm.addr, elm.target, elm.proxy)
 		if elm.network == "tcp" {
@@ -600,43 +749,43 @@ func PatchTunnel(tunnels []LC.Tunnel, tunnel C.Tunnel) {
 		}
 	}
 
-	for _, elm := range needCreate {
-		key := fmt.Sprintf("%s/%s/%s", elm.addr, elm.target, elm.proxy)
-		if elm.network == "tcp" {
-			l, err := LT.New(elm.addr, elm.target, elm.proxy, tunnel)
-			if err != nil {
-				log.Errorln("Start tunnel %s error: %s", elm.target, err.Error())
-				continue
-			}
-			tunnelTCPListeners[key] = l
-			log.Infoln("Tunnel(tcp/%s) proxy %s listening at: %s", elm.target, elm.proxy, tunnelTCPListeners[key].Address())
-		} else {
-			l, err := LT.NewUDP(elm.addr, elm.target, elm.proxy, tunnel)
-			if err != nil {
-				log.Errorln("Start tunnel %s error: %s", elm.target, err.Error())
-				continue
-			}
-			tunnelUDPListeners[key] = l
-			log.Infoln("Tunnel(udp/%s) proxy %s listening at: %s", elm.target, elm.proxy, tunnelUDPListeners[key].Address())
-		}
+	for key, listener := range createdTCP {
+		tunnelTCPListeners[key] = listener
+		elm := createdTCPMeta[key]
+		log.Infoln("Tunnel(tcp/%s) proxy %s listening at: %s", elm.target, elm.proxy, listener.Address())
 	}
+	for key, listener := range createdUDP {
+		tunnelUDPListeners[key] = listener
+		elm := createdUDPMeta[key]
+		log.Infoln("Tunnel(udp/%s) proxy %s listening at: %s", elm.target, elm.proxy, listener.Address())
+	}
+	return nil
 }
 
-func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C.Tunnel, dropOld bool) {
+func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C.Tunnel, dropOld bool) error {
 	inboundMux.Lock()
 	defer inboundMux.Unlock()
 
+	started := make(map[string]C.InboundListener)
 	for name, newListener := range newListenerMap {
 		if oldListener, ok := inboundListeners[name]; ok {
-			if !oldListener.Config().Equal(newListener.Config()) {
-				_ = oldListener.Close()
-			} else {
+			if oldListener.Config().Equal(newListener.Config()) {
 				continue
 			}
 		}
 		if err := newListener.Listen(tunnel); err != nil {
 			log.Errorln("Listener %s listen err: %s", name, err.Error())
-			continue
+			for _, listener := range started {
+				_ = listener.Close()
+			}
+			return err
+		}
+		started[name] = newListener
+	}
+
+	for name, newListener := range started {
+		if oldListener, ok := inboundListeners[name]; ok {
+			_ = oldListener.Close()
 		}
 		inboundListeners[name] = newListener
 	}
@@ -649,6 +798,7 @@ func PatchInboundListeners(newListenerMap map[string]C.InboundListener, tunnel C
 			}
 		}
 	}
+	return nil
 }
 
 // GetPorts return the ports of proxy servers

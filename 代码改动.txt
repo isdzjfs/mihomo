@@ -39,3 +39,35 @@
 - 新增回归测试覆盖 MASQUE oversized capsule、Trojan oversized UDP length、AnyTLS oversized padding scheme/range、VLESS Vision malformed ServerHello、SOCKS4 oversized NUL field。
 - 本次按要求未处理 `BUG-A7-01`（Unix socket / Windows named pipe external controller secret bypass）。
 - 验证：`rtk go test ./transport/masque ./transport/trojan ./transport/anytls/... ./transport/vless/vision ./transport/socks4` 通过；`rtk go test ./listener/anytls ./listener/inbound ./adapter/outbound` 通过；`rtk git -c safe.directory=C:/Users/Sen/Documents/GitHub/mihomo diff --check` 通过。
+
+2026-06-04（P1 补充）
+
+- 修复 reload/listener 非原子替换问题：HTTP、SOCKS、Mixed、Redir、TProxy、ShadowSocks、Vmess、Tuic 和 custom inbound 现在先构造/启动新实例，成功后再替换并关闭旧实例；失败时保留旧监听，避免坏 reload 直接中断原服务。
+- 修复 Redir/TProxy UDP 同配置 reload 不重试问题：TCP 与 UDP 监听状态分开判断，TCP 未变但 UDP 缺失或上次启动失败时仍会重试 UDP 侧。
+- 修复 DNS reload 非原子和异步启动不可见问题：DNS TCP/UDP socket 先同步绑定成功后再发布新 `Server`，失败时保留旧 DNS server；服务对象内部读取也加锁保护。
+- 修复 Linux iptables 半应用问题：`SetTProxyIPTables()` 现在逐步检查命令错误，失败后调用现有 cleanup 回滚已应用的 route/rule/chain；cleanup 也会在部分 chain 尚未创建时继续尝试基础清理。
+- 修复 rule matching 与 provider 更新竞态：rule-provider strategy 改为锁保护快照访问；`tunnel.match()` 只在全局配置锁内复制 rules/proxies 快照，锁外执行慢规则匹配、DNS 解析和进程查询，避免 traffic path 长时间持有配置锁。
+- 修复 Fetcher 与 provider close 生命周期竞态：`hash` / `updatedAt` 统一受互斥锁保护，`Close()` 会取消后台任务、关闭 watcher 并等待正在执行的 update/callback 结束，避免旧 provider 在 reload 后继续发布结果。
+- 修复 sniffer、resolver/hosts、入站 auth/IP filter 的 reload 并发读写：sniffer runtime state 改为 atomic snapshot；resolver、host mapper、hosts、DNS service、IPv6 开关和 system hosts 开关通过 getter/setter 加锁发布；入站白名单/跳过认证前缀改为不可变快照。
+- 补齐 adapter/pool 关闭链路：TUIC `PoolClient` 增加整体 `Close()` 并关闭 TCP/UDP client；Snell reuse pool 增加 pool-wide close；TrustTunnel client/pool 使用可取消 context，并在 close 时等待 health-check goroutine 退出。
+- 修复协议与资源预算类 P1：AnyTLS data frame 按 16-bit 上限分片并限制 session stream 数；Sudoku multiplex 增加 session stream 数、accept 队列、stream queued bytes/frames 上限；VLESS addon LEN 字段、ShadowSocks AEAD 小缓冲、MRS/domain/CIDR 二进制长度字段均增加分配前校验。
+- 修复 focused protocol 多地址 listener 部分构造失败泄漏：AnyTLS、Trojan、Sing Shadowsocks 在任一地址启动失败时会关闭已创建的 listener，并将 `closed` 标志改为 atomic，避免 accept loop 与 close 并发读写。
+- 本次按要求跳过 `BUG-R1-01`、`BUG-R1-02`、`BUG-R1-07`、`BUG-R1-08`、`BUG-R1-09`、`BUG-A7-07`、`BUG-A7-08`，并跳过控制面安全相关的 A7 项。
+- 验证：`rtk gofmt -w ...` 已执行；`rtk go test ./...` 通过，174 个包共 4416 个测试通过。
+
+2026-06-04（BUG-R1-02 补充）
+
+- 修复 `BUG-R1-02`：`hub/executor.ApplyConfig()` 现在返回聚合错误，DNS、主监听端口、custom inbound、TUN、tunnels、iptables、proxy/rule provider 初始化失败都会汇总给调用方。
+- 配置 REST reload 已接入错误返回：`PUT /configs` 在 apply 失败时返回 500，不再无条件 204；`PATCH /configs` 的端口/TUN/TUIC 等热改失败也会返回 500。
+- 修复依赖 R1-02 才能完整暴露的 reload 问题：DNS 重建失败、TUN 创建失败、Redir/TProxy UDP 半边失败、动态 tunnel 创建失败、iptables 配置失败现在都会保留可保留的旧实例并返回错误。
+- 补充 `hub.Parse()` 顶层错误传播：启动阶段 apply 失败会向调用方返回错误；外部控制器 `BUG-R1-09` 仍按先前要求保持跳过。
+- 验证：`rtk gofmt -w dns\server.go listener\listener.go hub\executor\executor.go hub\route\configs.go hub\hub.go` 已执行；`rtk go test ./...` 通过，174 个包共 4416 个测试通过。
+
+2026-06-04（BUG-R1-14 补充）
+
+- 完整修复 `BUG-R1-14` 文档点名的 WireGuard / Masque adapter 生命周期缺口：构造函数增加 ownership commit 前的 rollback defer，失败发生在 stack device、wireguard-go device、resolver 或 H2 transport 创建后时会调用 adapter `Close()` 统一清理。
+- WireGuard `Close()` 改为 nil-safe、idempotent，并区分已构造 wireguard-go device 与部分构造失败路径；正常路径交给 device 关闭 TUN/bind，部分构造路径手动关闭已创建的 TUN/bind。
+- Masque `Close()` 改为 nil-safe、idempotent，关闭 run context、H2 idle connections 和 TUN device，避免 H2 transport 或本地 device 在 adapter 替换后继续持有资源。
+- 补充同类生命周期 audit 中发现的 Shadowsocks/kcptun 漏点：`UDPOverTCPVersion` 校验提前到 kcptun client 创建之前，避免非法 UOT 配置在构造失败时留下 kcptun client。
+- 新增 WireGuard / Masque 构造失败回滚测试，覆盖 stack device 已创建后 DNS 解析失败时 device 必须恰好关闭一次。
+- 验证：`rtk gofmt -w adapter\outbound\wireguard.go adapter\outbound\masque.go adapter\outbound\shadowsocks.go adapter\outbound\lifecycle_test.go` 已执行；`rtk go test ./adapter/outbound` 通过，4 个测试通过；`rtk go test ./...` 通过，174 个包共 4418 个测试通过；`rtk git -c safe.directory=C:/Users/Sen/Documents/GitHub/mihomo diff --check` 通过。

@@ -20,6 +20,11 @@ import (
 	"github.com/metacubex/mihomo/transport/anytls/util"
 )
 
+const (
+	maxSessionStreams  = 1024
+	streamWriteTimeout = 30 * time.Second
+)
+
 type Session struct {
 	conn     net.Conn
 	connLock sync.Mutex
@@ -161,6 +166,9 @@ func (s *Session) OpenStream() (*Stream, error) {
 	case <-s.die:
 		return nil, io.ErrClosedPipe
 	default:
+		if len(s.streams) >= maxSessionStreams {
+			return nil, fmt.Errorf("anytls stream limit exceeded: %d", maxSessionStreams)
+		}
 		s.streams[sid] = stream
 		return stream, nil
 	}
@@ -193,7 +201,14 @@ func (s *Session) recvLoop() error {
 						stream, ok := s.streams[sid]
 						s.streamLock.RUnlock()
 						if ok {
-							stream.pipeW.Write(buffer)
+							_ = stream.pipeW.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+							_, err = stream.pipeW.Write(buffer)
+							_ = stream.pipeW.SetWriteDeadline(time.Time{})
+							if err != nil {
+								stream.closeWithError(err)
+								pool.Put(buffer)
+								return err
+							}
 						}
 						pool.Put(buffer)
 					} else {
@@ -210,6 +225,10 @@ func (s *Session) recvLoop() error {
 				}
 				s.streamLock.Lock()
 				if _, ok := s.streams[sid]; !ok {
+					if len(s.streams) >= maxSessionStreams {
+						s.streamLock.Unlock()
+						return fmt.Errorf("anytls stream limit exceeded: %d", maxSessionStreams)
+					}
 					stream := newStream(sid, s)
 					s.streams[sid] = stream
 					go func() {
@@ -372,43 +391,55 @@ func (s *Session) streamClosed(sid uint32) error {
 }
 
 func (s *Session) writeDataFrame(sid uint32, data []byte) (int, error) {
-	dataLen := len(data)
+	written := 0
+	for len(data) > 0 {
+		chunk := data
+		if len(chunk) > maxFramePayloadSize {
+			chunk = data[:maxFramePayloadSize]
+		}
+		if err := s.writeFrame(cmdPSH, sid, chunk); err != nil {
+			return written, err
+		}
+		written += len(chunk)
+		data = data[len(chunk):]
+	}
 
-	buffer := buf.NewSize(dataLen + headerOverHeadSize)
-	buffer.WriteByte(cmdPSH)
-	binary.BigEndian.PutUint32(buffer.Extend(4), sid)
-	binary.BigEndian.PutUint16(buffer.Extend(2), uint16(dataLen))
-	buffer.Write(data)
-	_, err := s.writeConn(buffer.Bytes())
-	buffer.Release()
+	return written, nil
+}
+
+func (s *Session) writeControlFrame(frame frame) (int, error) {
+	dataLen := len(frame.data)
+	if dataLen > maxFramePayloadSize {
+		return 0, fmt.Errorf("anytls control frame too large: %d", dataLen)
+	}
+
+	err := s.writeFrame(frame.cmd, frame.sid, frame.data)
 	if err != nil {
+		s.Close()
 		return 0, err
 	}
 
 	return dataLen, nil
 }
 
-func (s *Session) writeControlFrame(frame frame) (int, error) {
-	dataLen := len(frame.data)
+func (s *Session) writeFrame(cmd byte, sid uint32, data []byte) error {
+	dataLen := len(data)
 
 	buffer := buf.NewSize(dataLen + headerOverHeadSize)
-	buffer.WriteByte(frame.cmd)
-	binary.BigEndian.PutUint32(buffer.Extend(4), frame.sid)
+	buffer.WriteByte(cmd)
+	binary.BigEndian.PutUint32(buffer.Extend(4), sid)
 	binary.BigEndian.PutUint16(buffer.Extend(2), uint16(dataLen))
-	buffer.Write(frame.data)
+	buffer.Write(data)
 
 	s.conn.SetWriteDeadline(time.Now().Add(time.Second * 5))
+	defer s.conn.SetWriteDeadline(time.Time{})
 
 	_, err := s.writeConn(buffer.Bytes())
 	buffer.Release()
 	if err != nil {
-		s.Close()
-		return 0, err
+		return err
 	}
-
-	s.conn.SetWriteDeadline(time.Time{})
-
-	return dataLen, nil
+	return nil
 }
 
 func (s *Session) writeConn(b []byte) (n int, err error) {
