@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"fmt"
 	"net"
 	"sync/atomic"
 	"time"
@@ -75,7 +76,16 @@ func (c *Client) createOutboundTLSConnection(ctx context.Context) (net.Conn, err
 	b.Write(c.passwordSha256)
 	var paddingLen int
 	if pad := c.padding.Load().GenerateRecordPayloadSizes(0); len(pad) > 0 {
-		paddingLen = pad[0]
+		for _, l := range pad {
+			if l == padding.CheckMark {
+				continue
+			}
+			if l <= 0 || l > padding.MaxRecordPayloadSize {
+				return nil, fmt.Errorf("padding record size %d exceeds maximum %d", l, padding.MaxRecordPayloadSize)
+			}
+			paddingLen = l
+			break
+		}
 	}
 	binary.BigEndian.PutUint16(b.Extend(2), uint16(paddingLen))
 	if paddingLen > 0 {

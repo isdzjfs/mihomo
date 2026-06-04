@@ -19,6 +19,8 @@ type Command = uint8
 const (
 	CmdConnect Command = 0x01
 	CmdBind    Command = 0x02
+
+	maxNullTerminatedFieldLen = 255
 )
 
 type Code = uint8
@@ -34,6 +36,7 @@ var (
 	errVersionMismatched   = errors.New("version code mismatched")
 	errCommandNotSupported = errors.New("command not supported")
 	errIPv6NotSupported    = errors.New("IPv6 not supported")
+	errFieldTooLong        = errors.New("SOCKS4 field too long")
 
 	ErrRequestRejected         = errors.New("request rejected or failed")
 	ErrRequestIdentdFailed     = errors.New("request rejected because SOCKS server cannot connect to identd on the client")
@@ -190,6 +193,9 @@ func readUntilNull(r io.Reader) ([]byte, error) {
 		}
 		if data[0] == 0 {
 			return buf.Bytes(), nil
+		}
+		if buf.Len() >= maxNullTerminatedFieldLen {
+			return nil, errFieldTooLong
 		}
 		buf.WriteByte(data[0])
 	}

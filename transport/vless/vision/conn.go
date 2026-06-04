@@ -36,7 +36,7 @@ type Conn struct {
 	isTLS12orAbove             bool
 	enableXTLS                 bool
 	cipher                     uint16
-	remainingServerHello       uint16
+	remainingServerHello       int
 	readRemainingBuffer        *buf.Buffer
 	readRemainingContent       int
 	readRemainingPadding       int

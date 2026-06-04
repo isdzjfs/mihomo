@@ -312,6 +312,9 @@ func (s *Session) recvLoop() error {
 				}
 			case cmdUpdatePaddingScheme:
 				if hdr.Length() > 0 {
+					if int(hdr.Length()) > padding.MaxRawSchemeSize {
+						return fmt.Errorf("remote padding scheme length %d exceeds maximum %d", hdr.Length(), padding.MaxRawSchemeSize)
+					}
 					// `rawScheme` Do not use buffer to prevent subsequent misuse
 					rawScheme := make([]byte, int(hdr.Length()))
 					if _, err := io.ReadFull(s.conn, rawScheme); err != nil {
@@ -434,6 +437,9 @@ func (s *Session) writeConn(b []byte) (n int, err error) {
 					} else {
 						continue
 					}
+				}
+				if l <= 0 || l > padding.MaxRecordPayloadSize {
+					return n, fmt.Errorf("padding record size %d exceeds maximum %d", l, padding.MaxRecordPayloadSize)
 				}
 				if remainPayloadLen > l { // this packet is all payload
 					_, err = s.conn.Write(b[:l])

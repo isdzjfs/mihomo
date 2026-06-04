@@ -18,3 +18,24 @@
 - 自动模式下 `DialContext` / `ListenPacketContext` 拨号失败时立即重置 `fastSingle` 缓存，避免后续连接在 health-check 触发期间继续复用已失败的旧选择。
 - 新增回归测试，覆盖当前 `fastNode` 在扫描时不可用、后续 alive 状态翻转时仍应切换到其他可用节点的场景。
 - 验证：`rtk gofmt -w adapter/outboundgroup/urltest.go adapter/outboundgroup/parser_test.go adapter/outboundgroup/urltest_test.go`；`rtk go test ./adapter/outboundgroup` 通过；`rtk go test ./adapter/...` 通过。
+
+2026-06-03
+
+- 修复配置热更新时旧 provider / rule-provider / proxy 未关闭导致的资源泄漏：`tunnel.UpdateProxies()` / `tunnel.UpdateRules()` 现在返回被替换前的对象快照，`ApplyConfig()` 在新 provider 初始化后关闭旧对象，避免 reload 后 goroutine、health-check 与 inbound 资源残留。
+- 补齐旧 proxy adapter 本体的关闭链路：`ApplyConfig()` 在新配置加载完成、旧 provider 停止后显式关闭被替换的旧 proxy，`baseProvider.Close()` 也会关闭自身持有的 provider proxies，避免 Hysteria、Mieru、WireGuard、OpenVPN、SSH、mux client 等可能持有长期资源的 adapter 在 reload 后继续存活。
+- 加固 tunnel 与 HealthCheck 的并发访问：`proxies` / `providers` / `ruleProviders` 对外返回快照，`mode` 改为 atomic enum；HealthCheck 更新代理列表和执行测速时使用快照，避免配置 reload 与测速任务并发读写。
+- 修正非法 regex 会 panic 的问题：proxy-group 的 `filter` / `exclude-filter` 从 `MustCompile` 改为可返回错误的 `Compile`，解析阶段向调用方返回配置错误，并新增无效 regex 回归测试。
+- 修复 httpmask poll pull 分支的 `cancel()` 泄漏：decode 失败和连接关闭退出前都会释放请求 context，避免长轮询异常路径残留资源。
+- 修复 Mieru inbound 重复 `Listen()` 可能启动多个 accept loop 的崩溃风险：增加 `accepting` 状态保护，并取消 Mieru 四组子用例并行执行，避免测试中的外层并行触发 fatal crash。
+- 验证：`rtk go test ./...` 通过。
+
+2026-06-04
+
+- 修复 `BUG-T6-01`：MASQUE H2 DATAGRAM capsule 在按远端声明长度分配前增加 65535 字节上限，超限直接返回协议错误，避免恶意 MASQUE peer 触发超大内存分配。
+- 修复 `BUG-T6-02`：Trojan UDP `WaitReadFrom()` 在切片和读取 payload 前校验长度不超过协议分片上限与实际池缓冲长度，避免畸形 UDP 包通过长度字段触发 panic。
+- 修复 `BUG-F6-02`：AnyTLS padding scheme 增加 raw scheme、stop、单条 record payload、每包规则数量上限；远端 `cmdUpdatePaddingScheme` 和写路径都加兜底检查，避免服务端下发超大 padding 方案造成内存/带宽放大。
+- 修复 `BUG-F6-03`：VLESS Vision ServerHello 解析改为按 TLS record / handshake / session ID 边界逐段校验，只在字段完整且长度合法时读取 cipher suite，避免短包或畸形 ServerHello 触发越界 panic。
+- 修复 `BUG-A7-04`：SOCKS4 NUL 结尾字段增加 255 字节上限，超过后返回握手错误，避免未发送 NUL 的客户端无限增长内存占用。
+- 新增回归测试覆盖 MASQUE oversized capsule、Trojan oversized UDP length、AnyTLS oversized padding scheme/range、VLESS Vision malformed ServerHello、SOCKS4 oversized NUL field。
+- 本次按要求未处理 `BUG-A7-01`（Unix socket / Windows named pipe external controller secret bypass）。
+- 验证：`rtk go test ./transport/masque ./transport/trojan ./transport/anytls/... ./transport/vless/vision ./transport/socks4` 通过；`rtk go test ./listener/anytls ./listener/inbound ./adapter/outbound` 通过；`rtk git -c safe.directory=C:/Users/Sen/Documents/GitHub/mihomo diff --check` 通过。

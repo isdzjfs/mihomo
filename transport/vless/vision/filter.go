@@ -25,6 +25,11 @@ var (
 const (
 	tlsHandshakeTypeClientHello byte = 0x01
 	tlsHandshakeTypeServerHello byte = 0x02
+
+	tlsRecordHeaderLen     = 5
+	tlsHandshakeHeaderLen  = 4
+	tlsServerHelloFixedLen = 2 + 32 + 1
+	tlsMaxSessionIDLen     = 32
 )
 
 func (vc *Conn) FilterTLS(buffer []byte) (index int) {
@@ -34,16 +39,15 @@ func (vc *Conn) FilterTLS(buffer []byte) (index int) {
 	lenP := len(buffer)
 	vc.packetsToFilter--
 	if index = bytes.Index(buffer, tlsServerHandshakeStart); index != -1 {
-		if lenP > index+5 {
-			if buffer[0] == 22 && buffer[1] == 3 && buffer[2] == 3 {
+		if lenP > index+tlsRecordHeaderLen {
+			if buffer[index] == 22 && buffer[index+1] == 3 && buffer[index+2] == 3 {
 				vc.isTLS = true
-				if buffer[5] == tlsHandshakeTypeServerHello {
+				if buffer[index+tlsRecordHeaderLen] == tlsHandshakeTypeServerHello {
 					//log.Debugln("isTLS12orAbove")
-					vc.remainingServerHello = binary.BigEndian.Uint16(buffer[index+3:]) + 5
+					vc.remainingServerHello = int(binary.BigEndian.Uint16(buffer[index+3:index+5])) + tlsRecordHeaderLen
 					vc.isTLS12orAbove = true
-					if lenP-index >= 79 && vc.remainingServerHello >= 79 {
-						sessionIDLen := int(buffer[index+43])
-						vc.cipher = binary.BigEndian.Uint16(buffer[index+43+sessionIDLen+1:])
+					if cipher, ok := parseServerHelloCipher(buffer, index); ok {
+						vc.cipher = cipher
 					}
 				}
 			}
@@ -62,9 +66,9 @@ func (vc *Conn) FilterTLS(buffer []byte) (index int) {
 		}
 		if i+end > lenP {
 			end = lenP
-			vc.remainingServerHello -= uint16(end - i)
+			vc.remainingServerHello -= end - i
 		} else {
-			vc.remainingServerHello -= uint16(end)
+			vc.remainingServerHello -= end
 			end += i
 		}
 		if bytes.Contains(buffer[i:end], tls13SupportedVersions) {
@@ -87,4 +91,35 @@ func (vc *Conn) FilterTLS(buffer []byte) (index int) {
 		log.Debugln("XTLS Vision stop filtering")
 	}
 	return
+}
+
+func parseServerHelloCipher(buffer []byte, index int) (uint16, bool) {
+	if index < 0 || len(buffer) < index+tlsRecordHeaderLen+tlsHandshakeHeaderLen+tlsServerHelloFixedLen {
+		return 0, false
+	}
+
+	recordLen := int(binary.BigEndian.Uint16(buffer[index+3 : index+5]))
+	handshakeStart := index + tlsRecordHeaderLen
+	if buffer[handshakeStart] != tlsHandshakeTypeServerHello {
+		return 0, false
+	}
+	handshakeLen := int(buffer[handshakeStart+1])<<16 | int(buffer[handshakeStart+2])<<8 | int(buffer[handshakeStart+3])
+	if handshakeLen < tlsServerHelloFixedLen || handshakeLen+tlsHandshakeHeaderLen > recordLen {
+		return 0, false
+	}
+
+	cursor := handshakeStart + tlsHandshakeHeaderLen + 2 + 32
+	if cursor >= len(buffer) {
+		return 0, false
+	}
+	sessionIDLen := int(buffer[cursor])
+	if sessionIDLen > tlsMaxSessionIDLen {
+		return 0, false
+	}
+	cursor++
+	if tlsHandshakeHeaderLen+tlsServerHelloFixedLen+sessionIDLen+2 > recordLen || cursor+sessionIDLen+2 > len(buffer) {
+		return 0, false
+	}
+	cursor += sessionIDLen
+	return binary.BigEndian.Uint16(buffer[cursor : cursor+2]), true
 }

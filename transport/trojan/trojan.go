@@ -23,7 +23,8 @@ var (
 	DefaultALPN          = []string{"h2", "http/1.1"}
 	DefaultWebsocketALPN = []string{"http/1.1"}
 
-	crlf = []byte{'\r', '\n'}
+	crlf             = []byte{'\r', '\n'}
+	errPacketInvalid = errors.New("packet invalid")
 )
 
 type Command = byte
@@ -106,7 +107,7 @@ func ReadPacket(r io.Reader, payload []byte) (net.Addr, int, int, error) {
 
 	total := int(binary.BigEndian.Uint16(payload[:2]))
 	if total > maxLength {
-		return nil, 0, 0, errors.New("packet invalid")
+		return nil, 0, 0, errPacketInvalid
 	}
 
 	// read crlf
@@ -201,7 +202,13 @@ func (pc *PacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, er
 		}
 		return nil, nil, nil, err
 	}
-	length := binary.BigEndian.Uint16(data)
+	length := int(binary.BigEndian.Uint16(data))
+	if length > maxLength || length > len(data) {
+		if put != nil {
+			put()
+		}
+		return nil, nil, nil, errPacketInvalid
+	}
 
 	if length > 0 {
 		data = data[:length]

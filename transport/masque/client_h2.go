@@ -21,7 +21,13 @@ import (
 	"github.com/yosida95/uritemplate/v3"
 )
 
-const h2DatagramCapsuleType uint64 = 0
+const (
+	h2DatagramCapsuleType uint64 = 0
+
+	// H2 DATAGRAM capsules carry IP packets here; 65535 is the practical
+	// upper bound for non-jumbo IPv4/UDP payloads and prevents peer-sized allocation.
+	maxH2DatagramPayloadLen = 65535
+)
 
 const (
 	ipv4HeaderLen = 20
@@ -290,7 +296,10 @@ func (s *h2DatagramStream) ReceiveDatagram(_ context.Context) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		payload := make([]byte, payloadLen)
+		if payloadLen > maxH2DatagramPayloadLen {
+			return nil, fmt.Errorf("connect-ip: capsule payload length %d exceeds maximum %d", payloadLen, maxH2DatagramPayloadLen)
+		}
+		payload := make([]byte, int(payloadLen))
 		_, err = io.ReadFull(reader, payload)
 		if err != nil {
 			return nil, err
