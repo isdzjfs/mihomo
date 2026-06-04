@@ -24,6 +24,8 @@ const (
 	OptionError = byte(0x02)
 )
 
+const maxMuxFramePayload = 0xffff
+
 type MuxOption struct {
 	ID   [2]byte
 	Port uint16
@@ -104,6 +106,10 @@ func (m *Mux) Read(b []byte) (int, error) {
 }
 
 func (m *Mux) Write(b []byte) (int, error) {
+	if len(b) > maxMuxFramePayload {
+		return 0, errors.New("mux payload too large")
+	}
+
 	defer m.buf.Reset() // reset must after write (keep the data fill in NewMux can be sent)
 
 	binary.Write(&m.buf, binary.BigEndian, uint16(4))

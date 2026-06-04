@@ -39,7 +39,7 @@ type Listener struct {
 	simpleObfs   func(net.Conn) net.Conn
 }
 
-var _listener *Listener
+var defaultListener atomic.Pointer[Listener]
 
 // shadowTLSService is a wrapper for shadowsocks.Service to support shadowTLS.
 type shadowTLSService struct {
@@ -63,7 +63,7 @@ func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addi
 		}
 		defer func() {
 			if err == nil && listener == sl {
-				_listener = sl
+				defaultListener.Store(sl)
 			}
 		}()
 	}
@@ -256,6 +256,7 @@ func New(config LC.ShadowsocksServer, tunnel C.Tunnel, additions ...inbound.Addi
 
 func (l *Listener) Close() error {
 	l.closed.Store(true)
+	defaultListener.CompareAndSwap(l, nil)
 	var retErr error
 	for _, lis := range l.listeners {
 		err := lis.Close()
@@ -302,8 +303,9 @@ func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbou
 }
 
 func HandleShadowSocks(conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) bool {
-	if _listener != nil && !_listener.closed.Load() && _listener.service != nil {
-		go _listener.HandleConn(conn, tunnel, additions...)
+	listener := defaultListener.Load()
+	if listener != nil && !listener.closed.Load() && listener.service != nil {
+		go listener.HandleConn(conn, tunnel, additions...)
 		return true
 	}
 	return embedSS.HandleShadowSocks(conn, tunnel, additions...)

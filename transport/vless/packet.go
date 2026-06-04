@@ -2,11 +2,14 @@ package vless
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 
 	"github.com/metacubex/mihomo/common/pool"
 )
+
+const maxPacketPayload = 0xffff
 
 type PacketConn struct {
 	net.Conn
@@ -14,6 +17,9 @@ type PacketConn struct {
 }
 
 func (c *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if len(b) > maxPacketPayload {
+		return 0, fmt.Errorf("vless packet too large: %d", len(b))
+	}
 	err := binary.Write(c.Conn, binary.BigEndian, uint16(len(b)))
 	if err != nil {
 		return 0, err

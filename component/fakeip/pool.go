@@ -88,7 +88,17 @@ func (p *Pool) IPNet() netip.Prefix {
 
 // CloneFrom clone cache from old pool
 func (p *Pool) CloneFrom(o *Pool) {
+	if p == o {
+		return
+	}
+	p.mux.Lock()
+	defer p.mux.Unlock()
+	o.mux.Lock()
+	defer o.mux.Unlock()
+
 	o.store.CloneTo(p.store)
+	p.offset = o.offset
+	p.cycle = o.cycle
 }
 
 func (p *Pool) get(host string) netip.Addr {
@@ -108,6 +118,9 @@ func (p *Pool) get(host string) netip.Addr {
 }
 
 func (p *Pool) FlushFakeIP() error {
+	p.mux.Lock()
+	defer p.mux.Unlock()
+
 	err := p.store.FlushFakeIP()
 	if err == nil {
 		p.cycle = false
@@ -117,6 +130,9 @@ func (p *Pool) FlushFakeIP() error {
 }
 
 func (p *Pool) StoreState() {
+	p.mux.Lock()
+	defer p.mux.Unlock()
+
 	if s, ok := p.store.(*cachefileStore); ok {
 		s.PutByHost(offsetKey, p.offset)
 		if p.cycle {

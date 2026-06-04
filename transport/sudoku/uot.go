@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	maxUoTPayload = 64 * 1024
+	maxUoTPayload = 0xffff
 )
 
 // WriteDatagram sends a single UDP datagram frame over a reliable stream.

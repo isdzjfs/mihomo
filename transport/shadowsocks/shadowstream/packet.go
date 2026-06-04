@@ -68,7 +68,11 @@ func NewPacketConn(c N.EnhancePacketConn, ciph Cipher) *PacketConn {
 const maxPacketSize = 64 * 1024
 
 func (c *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	buf := pool.Get(maxPacketSize)
+	packetLen := c.IVSize() + len(b)
+	if packetLen > maxPacketSize {
+		return 0, io.ErrShortBuffer
+	}
+	buf := pool.Get(packetLen)
 	defer pool.Put(buf)
 	buf, err := Pack(buf, b, c.Cipher)
 	if err != nil {

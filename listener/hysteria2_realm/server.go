@@ -2,6 +2,7 @@ package hysteria2_realm
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"regexp"
@@ -24,6 +25,7 @@ type Listener struct {
 	closed    bool
 	config    LC.Hysteria2RealmServer
 	listeners []net.Listener
+	servers   []*http.Server
 	server    *server
 	cancel    func()
 }
@@ -106,6 +108,7 @@ func New(config LC.Hysteria2RealmServer, tunnel C.Tunnel, additions ...inbound.A
 			Handler:           s.routes(),
 			ReadHeaderTimeout: 10 * time.Second,
 		}
+		sl.servers = append(sl.servers, srv)
 
 		go srv.Serve(l)
 	}
@@ -118,17 +121,22 @@ func New(config LC.Hysteria2RealmServer, tunnel C.Tunnel, additions ...inbound.A
 
 func (l *Listener) Close() error {
 	l.closed = true
-	var retErr error
-	for _, lis := range l.listeners {
-		err := lis.Close()
-		if err != nil {
-			retErr = err
-		}
-	}
+	var errs []error
 	if l.cancel != nil {
 		l.cancel()
 	}
-	return retErr
+	for _, srv := range l.servers {
+		if err := srv.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	for _, lis := range l.listeners {
+		err := lis.Close()
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (l *Listener) Config() string {

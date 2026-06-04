@@ -41,7 +41,7 @@ const (
 	kipHelloUserHashSize = 8
 	kipHelloNonceSize    = 16
 	kipHelloPubSize      = 32
-	kipMaxPayload        = 64 * 1024
+	kipMaxPayload        = 0xffff
 )
 
 const kipClientHelloTableHintSize = 4

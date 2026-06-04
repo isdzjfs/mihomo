@@ -324,7 +324,7 @@ func (c Packet) WriteTo(writer BufferedWriter) (err error) {
 }
 
 func (c Packet) BytesLen() int {
-	return c.CommandHead.BytesLen() + 4 + 2 + c.ADDR.BytesLen() + len(c.DATA)
+	return c.CommandHead.BytesLen() + 2 + 2 + 1 + 1 + 2 + c.ADDR.BytesLen() + len(c.DATA)
 }
 
 var PacketOverHead = NewPacket(0, 0, 0, 0, 0, NewAddressAddrPort(netip.AddrPortFrom(netip.IPv6Unspecified(), 0)), nil).BytesLen()

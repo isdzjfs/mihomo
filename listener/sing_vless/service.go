@@ -260,6 +260,9 @@ func (c *serverPacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) 
 }
 
 func (c *serverPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
+	if len(p) > 0xffff {
+		return 0, E.New("vless packet too large: ", len(p))
+	}
 	err = binary.Write(c.ExtendedConn, binary.BigEndian, uint16(len(p)))
 	if err != nil {
 		return
@@ -285,6 +288,9 @@ func (c *serverPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksad
 
 func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
 	packetLen := buffer.Len()
+	if packetLen > 0xffff {
+		return E.New("vless packet too large: ", packetLen)
+	}
 	binary.BigEndian.PutUint16(buffer.ExtendHeader(2), uint16(packetLen))
 	return c.ExtendedConn.WriteBuffer(buffer)
 }

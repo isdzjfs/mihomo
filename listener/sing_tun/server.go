@@ -2,6 +2,7 @@ package sing_tun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -586,13 +587,21 @@ func (l *Listener) updateRule(ruleProvider P.RuleProvider, exclude bool, update 
 	}
 }
 
-func (l *Listener) OnReload() {
+func (l *Listener) OnReload() error {
+	var errs []error
 	if l.autoRedirectOutputMark != 0 {
-		dialer.DefaultRoutingMark.CompareAndSwap(0, l.autoRedirectOutputMark)
+		if !dialer.DefaultRoutingMark.CompareAndSwap(0, l.autoRedirectOutputMark) &&
+			dialer.DefaultRoutingMark.Load() != l.autoRedirectOutputMark {
+			errs = append(errs, fmt.Errorf("restore auto-redirect routing mark: current value is %d", dialer.DefaultRoutingMark.Load()))
+		}
 	}
 	if l.cDialerInterfaceFinder != nil {
-		dialer.DefaultInterfaceFinder.CompareAndSwap(nil, l.cDialerInterfaceFinder)
+		if !dialer.DefaultInterfaceFinder.CompareAndSwap(nil, l.cDialerInterfaceFinder) &&
+			dialer.DefaultInterfaceFinder.Load() != l.cDialerInterfaceFinder {
+			errs = append(errs, errors.New("restore auto-detect interface finder"))
+		}
 	}
+	return errors.Join(errs...)
 }
 
 type cDialerInterfaceFinder struct {

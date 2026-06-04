@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/metacubex/mihomo/common/atomic"
 	C "github.com/metacubex/mihomo/constant"
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/http"
@@ -27,8 +28,10 @@ import (
 )
 
 var (
-	allowLan    = false
-	bindAddress = "*"
+	bindState = atomic.NewTypedValue(listenerBindState{
+		allowLan:    false,
+		bindAddress: "*",
+	})
 
 	socksListener       *socks.Listener
 	socksUDPListener    *socks.UDPListener
@@ -64,6 +67,11 @@ var (
 	LastTuicConf LC.TuicServer
 )
 
+type listenerBindState struct {
+	allowLan    bool
+	bindAddress string
+}
+
 type Ports struct {
 	Port              int    `json:"port"`
 	SocksPort         int    `json:"socks-port"`
@@ -89,19 +97,39 @@ func GetTuicConf() LC.TuicServer {
 }
 
 func AllowLan() bool {
-	return allowLan
+	return bindState.Load().allowLan
 }
 
 func BindAddress() string {
-	return bindAddress
+	return bindState.Load().bindAddress
 }
 
 func SetAllowLan(al bool) {
-	allowLan = al
+	updateBindState(func(next *listenerBindState) {
+		next.allowLan = al
+	})
 }
 
 func SetBindAddress(host string) {
-	bindAddress = host
+	updateBindState(func(next *listenerBindState) {
+		next.bindAddress = host
+	})
+}
+
+func updateBindState(update func(*listenerBindState)) {
+	for {
+		current := bindState.Load()
+		next := current
+		update(&next)
+		if bindState.CompareAndSwap(current, next) {
+			return
+		}
+	}
+}
+
+func genListenAddr(port int) string {
+	state := bindState.Load()
+	return genAddr(state.bindAddress, port, state.allowLan)
 }
 
 func ReCreateHTTP(port int, tunnel C.Tunnel) error {
@@ -115,7 +143,7 @@ func ReCreateHTTP(port int, tunnel C.Tunnel) error {
 		}
 	}()
 
-	addr := genAddr(bindAddress, port, allowLan)
+	addr := genListenAddr(port)
 
 	oldListener := httpListener
 	if oldListener != nil && oldListener.RawAddress() == addr {
@@ -154,7 +182,7 @@ func ReCreateSocks(port int, tunnel C.Tunnel) error {
 		}
 	}()
 
-	addr := genAddr(bindAddress, port, allowLan)
+	addr := genListenAddr(port)
 
 	shouldTCPIgnore := false
 	shouldUDPIgnore := false
@@ -232,7 +260,7 @@ func ReCreateRedir(port int, tunnel C.Tunnel) error {
 		}
 	}()
 
-	addr := genAddr(bindAddress, port, allowLan)
+	addr := genListenAddr(port)
 
 	oldTCPListener := redirListener
 	oldUDPListener := redirUDPListener
@@ -467,7 +495,7 @@ func ReCreateTProxy(port int, tunnel C.Tunnel) error {
 		}
 	}()
 
-	addr := genAddr(bindAddress, port, allowLan)
+	addr := genListenAddr(port)
 
 	oldTCPListener := tproxyListener
 	oldUDPListener := tproxyUDPListener
@@ -537,7 +565,7 @@ func ReCreateMixed(port int, tunnel C.Tunnel) error {
 		}
 	}()
 
-	addr := genAddr(bindAddress, port, allowLan)
+	addr := genListenAddr(port)
 
 	shouldTCPIgnore := false
 	shouldUDPIgnore := false
@@ -618,7 +646,9 @@ func ReCreateTun(tunConf LC.Tun, tunnel C.Tunnel) error {
 
 	if tunConf.Equal(LastTunConf) && (tunLister != nil || !tunConf.Enable) {
 		if tunLister != nil { // some default value in dialer maybe changed when config reload, reset at here
-			tunLister.OnReload()
+			if err := tunLister.OnReload(); err != nil {
+				return err
+			}
 		}
 		return nil
 	}

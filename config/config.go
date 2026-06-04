@@ -984,7 +984,7 @@ func parseListeners(cfg *RawConfig) (listeners map[string]C.InboundListener, err
 		}
 
 		name := inboundListener.Name()
-		if _, exist := mapping[name]; exist {
+		if _, exist := listeners[name]; exist {
 			return nil, fmt.Errorf("listener %s is the duplicate name", name)
 		}
 

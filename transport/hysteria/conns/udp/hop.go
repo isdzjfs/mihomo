@@ -40,6 +40,8 @@ type ObfsUDPHopClientPacketConn struct {
 	closeChan chan struct{}
 	closed    bool
 
+	serverAddrSet map[string]struct{}
+
 	bufPool sync.Pool
 }
 
@@ -74,21 +76,25 @@ func NewObfsUDPHopClientPacketConn(server string, serverPorts string, hopInterva
 		return nil, err
 	}
 	serverAddrs := make([]net.Addr, len(ports))
+	serverAddrSet := make(map[string]struct{}, len(ports))
 	for i, port := range ports {
-		serverAddrs[i] = &net.UDPAddr{
+		addr := &net.UDPAddr{
 			IP:   net.ParseIP(ip),
 			Port: int(port),
 		}
+		serverAddrs[i] = addr
+		serverAddrSet[addr.String()] = struct{}{}
 	}
 	hopAddr := udpHopAddr(server)
 	conn := &ObfsUDPHopClientPacketConn{
-		serverAddr:  &hopAddr,
-		serverAddrs: serverAddrs,
-		hopInterval: hopInterval,
-		obfs:        obfs,
-		addrIndex:   randv2.IntN(len(serverAddrs)),
-		recvQueue:   make(chan *udpPacket, packetQueueSize),
-		closeChan:   make(chan struct{}),
+		serverAddr:    &hopAddr,
+		serverAddrs:   serverAddrs,
+		hopInterval:   hopInterval,
+		obfs:          obfs,
+		addrIndex:     randv2.IntN(len(serverAddrs)),
+		serverAddrSet: serverAddrSet,
+		recvQueue:     make(chan *udpPacket, packetQueueSize),
+		closeChan:     make(chan struct{}),
 		bufPool: sync.Pool{
 			New: func() interface{} {
 				return make([]byte, udpBufferSize)
@@ -184,22 +190,10 @@ func (c *ObfsUDPHopClientPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	for {
 		select {
 		case p := <-c.recvQueue:
-			/*
-				// Check if the packet is from one of the server addresses
-				for _, addr := range c.serverAddrs {
-					if addr.String() == p.addr.String() {
-						// Copy the packet to the buffer
-						n := copy(b, p.buf[:p.n])
-						c.bufPool.Put(p.buf)
-						return n, c.serverAddr, nil
-					}
-				}
-				// Drop the packet, continue
+			if _, ok := c.serverAddrSet[p.addr.String()]; !ok {
 				c.bufPool.Put(p.buf)
-			*/
-			// The above code was causing performance issues when the range is large,
-			// so we skip the check for now. Should probably still check by using a map
-			// or something in the future.
+				continue
+			}
 			n := copy(b, p.buf[:p.n])
 			c.bufPool.Put(p.buf)
 			return n, c.serverAddr, nil

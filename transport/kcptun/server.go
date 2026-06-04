@@ -51,6 +51,7 @@ func (s *Server) Serve(pc net.PacketConn, handler func(net.Conn)) error {
 		}
 
 		go func() {
+			defer netConn.Close()
 			// stream multiplex
 			smuxConfig := smux.DefaultConfig()
 			smuxConfig.Version = s.config.SmuxVer

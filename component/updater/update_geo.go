@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
@@ -22,26 +23,78 @@ import (
 )
 
 var (
-	autoUpdate     bool
-	updateInterval int
+	geoUpdateConfigValue = atomic.NewTypedValue(geoUpdateConfig{})
+	geoUpdateRunner      = geoUpdaterRunner{}
 
 	updatingGeo atomic.Bool
 )
 
+type geoUpdateConfig struct {
+	autoUpdate     bool
+	updateInterval int
+}
+
+type geoUpdaterRunner struct {
+	mu     sync.Mutex
+	cancel context.CancelFunc
+	config geoUpdateConfig
+}
+
 func GeoAutoUpdate() bool {
-	return autoUpdate
+	return geoUpdateConfigValue.Load().autoUpdate
 }
 
 func GeoUpdateInterval() int {
-	return updateInterval
+	return geoUpdateConfigValue.Load().updateInterval
 }
 
 func SetGeoAutoUpdate(newAutoUpdate bool) {
-	autoUpdate = newAutoUpdate
+	configureGeoUpdater(geoUpdateConfig{
+		autoUpdate:     newAutoUpdate,
+		updateInterval: GeoUpdateInterval(),
+	})
 }
 
 func SetGeoUpdateInterval(newGeoUpdateInterval int) {
-	updateInterval = newGeoUpdateInterval
+	configureGeoUpdater(geoUpdateConfig{
+		autoUpdate:     GeoAutoUpdate(),
+		updateInterval: newGeoUpdateInterval,
+	})
+}
+
+func ConfigureGeoUpdater(newAutoUpdate bool, newGeoUpdateInterval int) {
+	configureGeoUpdater(geoUpdateConfig{
+		autoUpdate:     newAutoUpdate,
+		updateInterval: newGeoUpdateInterval,
+	})
+}
+
+func configureGeoUpdater(config geoUpdateConfig) {
+	geoUpdateConfigValue.Store(config)
+
+	geoUpdateRunner.mu.Lock()
+	defer geoUpdateRunner.mu.Unlock()
+
+	if geoUpdateRunner.cancel != nil && geoUpdateRunner.config == config {
+		return
+	}
+	if geoUpdateRunner.cancel != nil {
+		geoUpdateRunner.cancel()
+		geoUpdateRunner.cancel = nil
+	}
+	geoUpdateRunner.config = config
+
+	if !config.autoUpdate {
+		return
+	}
+	if config.updateInterval <= 0 {
+		log.Errorln("[GEO] Invalid update interval: %d", config.updateInterval)
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	geoUpdateRunner.cancel = cancel
+	go runGeoUpdater(ctx, config.updateInterval)
 }
 
 func UpdateMMDB() (err error) {
@@ -232,35 +285,37 @@ func getUpdateTime() (time time.Time, err error) {
 }
 
 func RegisterGeoUpdater() {
-	if updateInterval <= 0 {
-		log.Errorln("[GEO] Invalid update interval: %d", updateInterval)
+	configureGeoUpdater(geoUpdateConfigValue.Load())
+}
+
+func runGeoUpdater(ctx context.Context, updateInterval int) {
+	ticker := time.NewTicker(time.Duration(updateInterval) * time.Hour)
+	defer ticker.Stop()
+
+	lastUpdate, err := getUpdateTime()
+	if err != nil {
+		log.Errorln("[GEO] Get GEO database update time error: %s", err.Error())
 		return
 	}
 
-	go func() {
-		ticker := time.NewTicker(time.Duration(updateInterval) * time.Hour)
-		defer ticker.Stop()
-
-		lastUpdate, err := getUpdateTime()
-		if err != nil {
-			log.Errorln("[GEO] Get GEO database update time error: %s", err.Error())
+	log.Infoln("[GEO] last update time %s", lastUpdate)
+	if lastUpdate.Add(time.Duration(updateInterval) * time.Hour).Before(time.Now()) {
+		log.Infoln("[GEO] Database has not been updated for %v, update now", time.Duration(updateInterval)*time.Hour)
+		if err := UpdateGeoDatabases(); err != nil {
+			log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
 			return
 		}
+	}
 
-		log.Infoln("[GEO] last update time %s", lastUpdate)
-		if lastUpdate.Add(time.Duration(updateInterval) * time.Hour).Before(time.Now()) {
-			log.Infoln("[GEO] Database has not been updated for %v, update now", time.Duration(updateInterval)*time.Hour)
-			if err := UpdateGeoDatabases(); err != nil {
-				log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
-				return
-			}
-		}
-
-		for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 			log.Infoln("[GEO] updating database every %d hours", updateInterval)
 			if err := UpdateGeoDatabases(); err != nil {
 				log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
 			}
 		}
-	}()
+	}
 }

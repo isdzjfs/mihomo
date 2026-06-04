@@ -57,6 +57,12 @@ func (c *Client) createConn(ctx context.Context, dial DialFn) (*smux.Session, er
 	if err != nil {
 		return nil, err
 	}
+	connOwned := true
+	defer func() {
+		if connOwned {
+			_ = conn.Close()
+		}
+	}()
 
 	config := c.config
 	convid := randv2.Uint32()
@@ -64,6 +70,12 @@ func (c *Client) createConn(ctx context.Context, dial DialFn) (*smux.Session, er
 	if err != nil {
 		return nil, err
 	}
+	kcpOwned := true
+	defer func() {
+		if kcpOwned {
+			_ = kcpconn.Close()
+		}
+	}()
 	kcpconn.SetStreamMode(true)
 	kcpconn.SetWriteDelay(false)
 	kcpconn.SetNoDelay(config.NoDelay, config.Interval, config.Resend, config.NoCongestion)
@@ -94,7 +106,13 @@ func (c *Client) createConn(ctx context.Context, dial DialFn) (*smux.Session, er
 		netConn = NewCompStream(netConn)
 	}
 	// stream multiplex
-	return smux.Client(netConn, smuxConfig)
+	session, err := smux.Client(netConn, smuxConfig)
+	if err != nil {
+		return nil, err
+	}
+	connOwned = false
+	kcpOwned = false
+	return session, nil
 }
 
 func (c *Client) OpenStream(ctx context.Context, dial DialFn) (*smux.Stream, error) {

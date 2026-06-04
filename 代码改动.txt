@@ -71,3 +71,13 @@
 - 补充同类生命周期 audit 中发现的 Shadowsocks/kcptun 漏点：`UDPOverTCPVersion` 校验提前到 kcptun client 创建之前，避免非法 UOT 配置在构造失败时留下 kcptun client。
 - 新增 WireGuard / Masque 构造失败回滚测试，覆盖 stack device 已创建后 DNS 解析失败时 device 必须恰好关闭一次。
 - 验证：`rtk gofmt -w adapter\outbound\wireguard.go adapter\outbound\masque.go adapter\outbound\shadowsocks.go adapter\outbound\lifecycle_test.go` 已执行；`rtk go test ./adapter/outbound` 通过，4 个测试通过；`rtk go test ./...` 通过，174 个包共 4418 个测试通过；`rtk git -c safe.directory=C:/Users/Sen/Documents/GitHub/mihomo diff --check` 通过。
+
+2026-06-04（P2 补充）
+
+- 修复 `BUG-R1-10`：geo updater 改为受管理的运行时组件，`geo-auto-update` 和 `geo-update-interval` reload 时会通过同一入口重配；关闭自动更新会取消旧 ticker，调整 interval 会重启后台更新循环。
+- 修复 `BUG-R1-11` / `BUG-R1-12` / `BUG-R1-13`：TUN same-config reload 的 routing mark/interface finder 恢复失败现在会返回错误；custom inbound 重名检测改为检查最终 listener map；`allow-lan` / `bind-address`、ETag、ShadowSocks 默认 listener 等全局状态改为 atomic snapshot/pointer 发布。
+- 修复统计、provider、selector 与 fake-IP 的 P2 竞态：连接统计 `memory` 改为 atomic；provider `subscriptionInfo` 读写纳入 provider mutex；proxy provider override 后按最终 `proxy.Name()` 去重并报错；selector 手动选择加锁；fake-IP clone/flush/store-state 与分配路径共用同一把锁。
+- 修复协议边界类 P2：v2ray-plugin mux 拒绝超过 65535 字节的单帧写入；TUIC v5 修正 `BytesLen()` 与分片 `ReadFrom()` 重组数据来源；TUIC v4/v5 `MaxOpenStreams` 改为超过上限才拒绝；Sudoku UoT/KIP 最大 payload 改为 `0xffff`；VLESS 域名长度和 UDP packet 长度写入前校验。
+- 修复 Hysteria / Hysteria2 / KCP 生命周期与校验问题：fakeTCP cleaner 改为持续 ticker 循环并停止 ticker；UDP hop 使用 server address map 校验包来源；KCP/smux 构造失败路径补齐底层 packet/KCP 连接回滚；Hysteria2 Realm listener 保存并关闭 HTTP server，reaper 在 context 取消时直接退出；Hysteria2 IPv6-only resolver 改为 IPv6 查询。
+- 修复 ShadowSocks UDP 包装器固定 64 KiB scratch buffer 问题：AEAD/stream packet 写路径按实际加密后长度申请 buffer，并保留最大包大小限制，避免小 UDP 包高并发时占用过大的临时缓冲。
+- 验证：`rtk gofmt -w ...` 已执行；`rtk go test ./transport/v2ray-plugin ./transport/tuic/v4 ./transport/tuic/v5 ./transport/sudoku ./transport/vless ./listener/sing_vless ./adapter/outbound ./transport/kcptun ./transport/hysteria/conns/faketcp ./transport/hysteria/conns/udp ./listener/hysteria2_realm ./tunnel/statistic ./component/resource ./component/fakeip ./adapter/outboundgroup ./config ./adapter/provider ./listener ./listener/sing_tun ./component/updater ./hub/executor ./listener/sing_shadowsocks ./listener/shadowsocks ./transport/shadowsocks/shadowaead ./transport/shadowsocks/shadowstream` 通过，25 个包共 82 个测试通过；`rtk git -c safe.directory=C:/Users/Sen/Documents/GitHub/mihomo diff --check` 通过。

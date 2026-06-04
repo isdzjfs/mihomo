@@ -141,7 +141,7 @@ func (pp *proxySetProvider) MarshalJSON() ([]byte, error) {
 		TestUrl:          pp.healthCheck.url,
 		ExpectedStatus:   pp.healthCheck.expectedStatus.String(),
 		UpdatedAt:        pp.UpdatedAt(),
-		SubscriptionInfo: pp.subscriptionInfo,
+		SubscriptionInfo: pp.getSubscriptionInfo(),
 	})
 }
 
@@ -163,10 +163,22 @@ func (pp *proxySetProvider) Initial() error {
 		return err
 	}
 	if subscriptionInfo := cachefile.Cache().GetSubscriptionInfo(pp.Name()); subscriptionInfo != "" {
-		pp.subscriptionInfo = NewSubscriptionInfo(subscriptionInfo)
+		pp.setSubscriptionInfo(NewSubscriptionInfo(subscriptionInfo))
 	}
 	pp.closeAllConnections()
 	return nil
+}
+
+func (pp *proxySetProvider) getSubscriptionInfo() *SubscriptionInfo {
+	pp.mutex.RLock()
+	defer pp.mutex.RUnlock()
+	return pp.subscriptionInfo
+}
+
+func (pp *proxySetProvider) setSubscriptionInfo(info *SubscriptionInfo) {
+	pp.mutex.Lock()
+	pp.subscriptionInfo = info
+	pp.mutex.Unlock()
 }
 
 func (pp *proxySetProvider) closeAllConnections() {
@@ -216,7 +228,7 @@ func NewProxySetProvider(name string, interval time.Duration, payload []map[stri
 		httpVehicle.SetInRead(func(resp *http.Response) {
 			if subscriptionInfo := resp.Header.Get("subscription-userinfo"); subscriptionInfo != "" {
 				cachefile.Cache().SetSubscriptionInfo(name, subscriptionInfo)
-				pd.subscriptionInfo = NewSubscriptionInfo(subscriptionInfo)
+				pd.setSubscriptionInfo(NewSubscriptionInfo(subscriptionInfo))
 			}
 		})
 	}
@@ -426,10 +438,6 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 						continue
 					}
 				}
-				if _, ok := proxiesSet[name]; ok {
-					continue
-				}
-
 				if len(dialerProxy) > 0 {
 					mapping["dialer-proxy"] = dialerProxy
 				}
@@ -444,7 +452,11 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 					return nil, fmt.Errorf("proxy %d error: %w", idx, err)
 				}
 
-				proxiesSet[name] = struct{}{}
+				effectiveName := proxy.Name()
+				if _, ok := proxiesSet[effectiveName]; ok {
+					return nil, fmt.Errorf("proxy %s is the duplicate name", effectiveName)
+				}
+				proxiesSet[effectiveName] = struct{}{}
 				proxies = append(proxies, proxy)
 			}
 		}

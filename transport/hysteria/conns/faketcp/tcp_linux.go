@@ -99,21 +99,24 @@ func (conn *TCPConn) lockflow(addr net.Addr, f func(e *tcpFlow)) {
 // clean expired flows
 func (conn *TCPConn) cleaner() {
 	ticker := time.NewTicker(time.Minute)
-	select {
-	case <-conn.die:
-		return
-	case <-ticker.C:
-		conn.flowsLock.Lock()
-		for k, v := range conn.flowTable {
-			if time.Now().Sub(v.ts) > expire {
-				if v.conn != nil {
-					setTTL(v.conn, 64)
-					v.conn.Close()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-conn.die:
+			return
+		case <-ticker.C:
+			conn.flowsLock.Lock()
+			for k, v := range conn.flowTable {
+				if time.Since(v.ts) > expire {
+					if v.conn != nil {
+						setTTL(v.conn, 64)
+						v.conn.Close()
+					}
+					delete(conn.flowTable, k)
 				}
-				delete(conn.flowTable, k)
 			}
+			conn.flowsLock.Unlock()
 		}
-		conn.flowsLock.Unlock()
 	}
 }
 

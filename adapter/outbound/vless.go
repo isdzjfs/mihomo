@@ -78,6 +78,8 @@ type VlessOption struct {
 	ClientFingerprint string            `proxy:"client-fingerprint,omitempty"`
 }
 
+const maxVlessDomainLen = 0xff
+
 type XHTTPOptions struct {
 	Path                 string                 `proxy:"path,omitempty"`
 	Host                 string                 `proxy:"host,omitempty"`
@@ -254,9 +256,17 @@ func (v *Vless) streamConnContext(ctx context.Context, c net.Conn, metadata *C.M
 				DstPort: metadata.DstPort,
 			}
 		}
-		conn, err = v.client.StreamConn(c, parseVlessAddr(metadata, v.option.XUDP))
+		dst, parseErr := parseVlessAddr(metadata, v.option.XUDP)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		conn, err = v.client.StreamConn(c, dst)
 	} else {
-		conn, err = v.client.StreamConn(c, parseVlessAddr(metadata, false))
+		dst, parseErr := parseVlessAddr(metadata, false)
+		if parseErr != nil {
+			return nil, parseErr
+		}
+		conn, err = v.client.StreamConn(c, dst)
 	}
 	if err != nil {
 		conn = nil
@@ -388,7 +398,7 @@ func (v *Vless) Close() error {
 	return errors.Join(errs...)
 }
 
-func parseVlessAddr(metadata *C.Metadata, xudp bool) *vless.DstAddr {
+func parseVlessAddr(metadata *C.Metadata, xudp bool) (*vless.DstAddr, error) {
 	var addrType byte
 	var addr []byte
 	switch metadata.AddrType() {
@@ -401,6 +411,9 @@ func parseVlessAddr(metadata *C.Metadata, xudp bool) *vless.DstAddr {
 		addr = make([]byte, net.IPv6len)
 		copy(addr[:], metadata.DstIP.AsSlice())
 	case C.AtypDomainName:
+		if len(metadata.Host) > maxVlessDomainLen {
+			return nil, fmt.Errorf("vless domain name too long: %d", len(metadata.Host))
+		}
 		addrType = vless.AtypDomainName
 		addr = make([]byte, len(metadata.Host)+1)
 		addr[0] = byte(len(metadata.Host))
@@ -413,7 +426,7 @@ func parseVlessAddr(metadata *C.Metadata, xudp bool) *vless.DstAddr {
 		Addr:     addr,
 		Port:     metadata.DstPort,
 		Mux:      metadata.NetWork == C.UDP && xudp,
-	}
+	}, nil
 }
 
 func NewVless(option VlessOption) (*Vless, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync"
 
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
@@ -11,6 +12,7 @@ import (
 
 type Selector struct {
 	*GroupBase
+	stateMux   sync.RWMutex
 	disableUDP bool
 	selected   string
 	testUrl    string
@@ -78,7 +80,7 @@ func (s *Selector) Now() string {
 func (s *Selector) Set(name string) error {
 	for _, proxy := range s.GetProxies(false) {
 		if proxy.Name() == name {
-			s.selected = name
+			s.setSelected(name)
 			return nil
 		}
 	}
@@ -87,7 +89,7 @@ func (s *Selector) Set(name string) error {
 }
 
 func (s *Selector) ForceSet(name string) {
-	s.selected = name
+	s.setSelected(name)
 }
 
 // Unwrap implements C.ProxyAdapter
@@ -97,13 +99,26 @@ func (s *Selector) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
 
 func (s *Selector) selectedProxy(touch bool) C.Proxy {
 	proxies := s.GetProxies(touch)
+	selected := s.getSelected()
 	for _, proxy := range proxies {
-		if proxy.Name() == s.selected {
+		if proxy.Name() == selected {
 			return proxy
 		}
 	}
 
 	return proxies[0]
+}
+
+func (s *Selector) getSelected() string {
+	s.stateMux.RLock()
+	defer s.stateMux.RUnlock()
+	return s.selected
+}
+
+func (s *Selector) setSelected(name string) {
+	s.stateMux.Lock()
+	s.selected = name
+	s.stateMux.Unlock()
 }
 
 func (s *Selector) Providers() []P.ProxyProvider {

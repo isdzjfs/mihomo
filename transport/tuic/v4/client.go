@@ -263,7 +263,7 @@ func (t *clientImpl) DialContext(ctx context.Context, metadata *C.Metadata) (net
 		return nil, err
 	}
 	openStreams := t.openStreams.Add(1)
-	if openStreams >= t.MaxOpenStreams {
+	if openStreams > t.MaxOpenStreams {
 		t.openStreams.Add(-1)
 		return nil, types.TooManyOpenStreams
 	}
@@ -338,7 +338,7 @@ func (t *clientImpl) ListenPacket(ctx context.Context, metadata *C.Metadata) (ne
 		return nil, err
 	}
 	openStreams := t.openStreams.Add(1)
-	if openStreams >= t.MaxOpenStreams {
+	if openStreams > t.MaxOpenStreams {
 		t.openStreams.Add(-1)
 		return nil, types.TooManyOpenStreams
 	}

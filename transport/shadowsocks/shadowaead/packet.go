@@ -71,13 +71,24 @@ func NewPacketConn(c N.EnhancePacketConn, ciph Cipher) *PacketConn {
 
 // WriteTo encrypts b and write to addr using the embedded PacketConn.
 func (c *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	buf := pool.Get(maxPacketSize)
-	defer pool.Put(buf)
-	buf, err := Pack(buf, b, c)
+	salt := pool.Get(c.SaltSize())
+	defer pool.Put(salt)
+	if _, err := rand.Read(salt); err != nil {
+		return 0, err
+	}
+	aead, err := c.Encrypter(salt)
 	if err != nil {
 		return 0, err
 	}
-	_, err = c.EnhancePacketConn.WriteTo(buf, addr)
+	packetLen := len(salt) + len(b) + aead.Overhead()
+	if packetLen > maxPacketSize {
+		return 0, io.ErrShortBuffer
+	}
+	buf := pool.Get(packetLen)
+	defer pool.Put(buf)
+	copy(buf[:len(salt)], salt)
+	encrypted := aead.Seal(buf[len(salt):len(salt)], _zerononce[:aead.NonceSize()], b, nil)
+	_, err = c.EnhancePacketConn.WriteTo(buf[:len(salt)+len(encrypted)], addr)
 	return len(b), err
 }
 
