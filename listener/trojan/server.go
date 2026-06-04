@@ -245,13 +245,20 @@ func (l *Listener) HandleConn(conn net.Conn, tunnel C.Tunnel, additions ...inbou
 		return
 	}
 
-	var crlf [2]byte
-	if _, err := io.ReadFull(conn, crlf[:]); err != nil {
-		//log.Warnln("read crlf error: %s", err.Error())
+	if !readCRLF(conn) {
 		return
 	}
 
 	l.handleConn(false, conn, tunnel, additions...)
+}
+
+func readCRLF(reader io.Reader) bool {
+	var crlf [2]byte
+	if _, err := io.ReadFull(reader, crlf[:]); err != nil {
+		//log.Warnln("read crlf error: %s", err.Error())
+		return false
+	}
+	return crlf == [2]byte{'\r', '\n'}
 }
 
 func (l *Listener) handleConn(inMux bool, conn net.Conn, tunnel C.Tunnel, additions ...inbound.Addition) {
@@ -279,9 +286,7 @@ func (l *Listener) handleConn(inMux bool, conn net.Conn, tunnel C.Tunnel, additi
 	}
 
 	if !inMux {
-		var crlf [2]byte
-		if _, err := io.ReadFull(conn, crlf[:]); err != nil {
-			//log.Warnln("read crlf error: %s", err.Error())
+		if !readCRLF(conn) {
 			return
 		}
 	}

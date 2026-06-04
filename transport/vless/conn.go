@@ -133,7 +133,9 @@ func (vc *Conn) recvResponse() (err error) {
 
 	length := int64(buffer[1])
 	if length != 0 { // addon data length > 0
-		io.CopyN(io.Discard, vc.ExtendedConn, length) // just discard
+		if _, err = io.CopyN(io.Discard, vc.ExtendedConn, length); err != nil { // just discard
+			return err
+		}
 	}
 
 	return

@@ -81,3 +81,12 @@
 - 修复 Hysteria / Hysteria2 / KCP 生命周期与校验问题：fakeTCP cleaner 改为持续 ticker 循环并停止 ticker；UDP hop 使用 server address map 校验包来源；KCP/smux 构造失败路径补齐底层 packet/KCP 连接回滚；Hysteria2 Realm listener 保存并关闭 HTTP server，reaper 在 context 取消时直接退出；Hysteria2 IPv6-only resolver 改为 IPv6 查询。
 - 修复 ShadowSocks UDP 包装器固定 64 KiB scratch buffer 问题：AEAD/stream packet 写路径按实际加密后长度申请 buffer，并保留最大包大小限制，避免小 UDP 包高并发时占用过大的临时缓冲。
 - 验证：`rtk gofmt -w ...` 已执行；`rtk go test ./transport/v2ray-plugin ./transport/tuic/v4 ./transport/tuic/v5 ./transport/sudoku ./transport/vless ./listener/sing_vless ./adapter/outbound ./transport/kcptun ./transport/hysteria/conns/faketcp ./transport/hysteria/conns/udp ./listener/hysteria2_realm ./tunnel/statistic ./component/resource ./component/fakeip ./adapter/outboundgroup ./config ./adapter/provider ./listener ./listener/sing_tun ./component/updater ./hub/executor ./listener/sing_shadowsocks ./listener/shadowsocks ./transport/shadowsocks/shadowaead ./transport/shadowsocks/shadowstream` 通过，25 个包共 82 个测试通过；`rtk git -c safe.directory=C:/Users/Sen/Documents/GitHub/mihomo diff --check` 通过。
+
+2026-06-05（P3 补充）
+
+- 按要求跳过 `BUG-F6-12`，未处理 Hysteria2 `max-idle-time` 配置被接受但未应用的问题。
+- 修复 `BUG-F6-13`：Trojan 入站握手读取 CRLF 后现在会校验字节必须严格等于 `\r\n`，首段认证后和请求地址后的两处 CRLF 都复用同一校验逻辑，非法或截断握手会直接拒绝。
+- 修复 `BUG-F6-14`：VLESS response addon discard 现在会检查并返回 `io.CopyN` 的错误，截断 addon 数据不再被静默吞掉，调用方能在响应头处理阶段得到协议读取错误。
+- 修复 `BUG-A7-09`：Hysteria2 Realm inbound 的编译期接口断言改为 `(*Hysteria2RealmServer)(nil)`，让断言覆盖真正的目标类型。
+- 新增回归测试覆盖 Trojan CRLF 校验和 VLESS 截断 response addon 错误返回；Hysteria2 Realm 接口断言由 `listener/inbound` 包编译测试覆盖。
+- 验证：`rtk gofmt -w listener/trojan/server.go listener/trojan/server_test.go transport/vless/conn.go transport/vless/conn_test.go listener/inbound/hysteria2_realm.go` 已执行；`rtk go test ./listener/trojan ./transport/vless ./listener/inbound` 通过；`rtk git -c safe.directory=C:/Users/Sen/Documents/GitHub/mihomo diff --check -- listener/trojan/server.go listener/trojan/server_test.go transport/vless/conn.go transport/vless/conn_test.go listener/inbound/hysteria2_realm.go` 通过。

@@ -102,4 +102,4 @@ func (t *Hysteria2RealmServer) Close() error {
 	return t.l.Close()
 }
 
-var _ C.InboundListener = (*Hysteria2)(nil)
+var _ C.InboundListener = (*Hysteria2RealmServer)(nil)
