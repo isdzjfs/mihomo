@@ -273,6 +273,7 @@ func (u *URLTest) MarshalJSON() ([]byte, error) {
 		"fixed":          u.getSelected(),
 		"hidden":         u.Hidden(),
 		"icon":           u.Icon(),
+		"emptyFallback":  u.EmptyFallback().Name(),
 	})
 }
 
@@ -305,7 +306,7 @@ func parseURLTestOption(config map[string]any) []urlTestOption {
 	return opts
 }
 
-func NewURLTest(option *GroupCommonOption, providers []P.ProxyProvider, options ...urlTestOption) (*URLTest, error) {
+func NewURLTest(option *GroupCommonOption, emptyFallback C.Proxy, providers []P.ProxyProvider, options ...urlTestOption) (*URLTest, error) {
 	groupBase, err := NewGroupBase(GroupBaseOption{
 		Name:           option.Name,
 		Type:           C.URLTest,
@@ -316,6 +317,7 @@ func NewURLTest(option *GroupCommonOption, providers []P.ProxyProvider, options 
 		ExcludeType:    option.ExcludeType,
 		TestTimeout:    option.TestTimeout,
 		MaxFailedTimes: option.MaxFailedTimes,
+		EmptyFallback:  emptyFallback,
 		Providers:      providers,
 	})
 	if err != nil {

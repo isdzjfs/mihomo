@@ -64,12 +64,13 @@ func (s *Selector) MarshalJSON() ([]byte, error) {
 	}
 
 	return json.Marshal(map[string]any{
-		"type":    s.Type().String(),
-		"now":     s.Now(),
-		"all":     all,
-		"testUrl": url,
-		"hidden":  s.Hidden(),
-		"icon":    s.Icon(),
+		"type":          s.Type().String(),
+		"now":           s.Now(),
+		"all":           all,
+		"testUrl":       url,
+		"hidden":        s.Hidden(),
+		"icon":          s.Icon(),
+		"emptyFallback": s.EmptyFallback().Name(),
 	})
 }
 
@@ -129,7 +130,7 @@ func (s *Selector) Proxies() []C.Proxy {
 	return s.GetProxies(false)
 }
 
-func NewSelector(option *GroupCommonOption, providers []P.ProxyProvider) (*Selector, error) {
+func NewSelector(option *GroupCommonOption, emptyFallback C.Proxy, providers []P.ProxyProvider) (*Selector, error) {
 	groupBase, err := NewGroupBase(GroupBaseOption{
 		Name:           option.Name,
 		Type:           C.Selector,
@@ -140,6 +141,7 @@ func NewSelector(option *GroupCommonOption, providers []P.ProxyProvider) (*Selec
 		ExcludeType:    option.ExcludeType,
 		TestTimeout:    option.TestTimeout,
 		MaxFailedTimes: option.MaxFailedTimes,
+		EmptyFallback:  emptyFallback,
 		Providers:      providers,
 	})
 	if err != nil {
@@ -148,7 +150,7 @@ func NewSelector(option *GroupCommonOption, providers []P.ProxyProvider) (*Selec
 
 	return &Selector{
 		GroupBase:  groupBase,
-		selected:   "COMPATIBLE",
+		selected:   emptyFallback.Name(),
 		disableUDP: option.DisableUDP,
 		testUrl:    option.URL,
 	}, nil

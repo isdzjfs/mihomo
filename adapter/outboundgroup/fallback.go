@@ -110,6 +110,7 @@ func (f *Fallback) MarshalJSON() ([]byte, error) {
 		"fixed":          f.getSelected(),
 		"hidden":         f.Hidden(),
 		"icon":           f.Icon(),
+		"emptyFallback":  f.EmptyFallback().Name(),
 	})
 }
 
@@ -194,7 +195,7 @@ func (f *Fallback) Proxies() []C.Proxy {
 	return f.GetProxies(false)
 }
 
-func NewFallback(option *GroupCommonOption, providers []P.ProxyProvider) (*Fallback, error) {
+func NewFallback(option *GroupCommonOption, emptyFallback C.Proxy, providers []P.ProxyProvider) (*Fallback, error) {
 	groupBase, err := NewGroupBase(GroupBaseOption{
 		Name:           option.Name,
 		Type:           C.Fallback,
@@ -205,6 +206,7 @@ func NewFallback(option *GroupCommonOption, providers []P.ProxyProvider) (*Fallb
 		ExcludeType:    option.ExcludeType,
 		TestTimeout:    option.TestTimeout,
 		MaxFailedTimes: option.MaxFailedTimes,
+		EmptyFallback:  emptyFallback,
 		Providers:      providers,
 	})
 	if err != nil {

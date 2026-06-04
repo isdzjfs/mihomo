@@ -1,6 +1,7 @@
 package openvpn
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
@@ -27,6 +28,18 @@ const (
 
 	PeerIDUnset uint32 = 0xffffff
 )
+
+// OpenVPN data-channel ping payload, matching PING_STRING in upstream OpenVPN.
+var openVPNPingPacket = []byte{
+	0x2a, 0x18, 0x7b, 0xf3,
+	0x64, 0x1e, 0xb4, 0xcb,
+	0x07, 0xed, 0x2d, 0x0a,
+	0x98, 0x1f, 0xc7, 0x48,
+}
+
+func IsPingPacket(packet []byte) bool {
+	return bytes.Equal(packet, openVPNPingPacket)
+}
 
 type DataChannel struct {
 	sendAEAD cipher.AEAD

@@ -68,6 +68,7 @@ func TestURLTestDoesNotKeepCurrentNodeWhenAliveStateFlapsAfterScan(t *testing.T)
 
 	group, err := NewURLTest(
 		&GroupCommonOption{Name: "auto", URL: testURL},
+		aliveC,
 		[]P.ProxyProvider{&urlTestProvider{
 			name:    "provider",
 			proxies: []C.Proxy{deadA, flappingB, aliveC},

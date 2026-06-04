@@ -174,9 +174,9 @@ func New(config LC.TrojanServer, tunnel C.Tunnel, additions ...inbound.Addition)
 			l = realityBuilder.NewListener(l)
 		} else if tlsConfig.GetCertificate != nil {
 			l = tls.NewListener(l, tlsConfig)
-		} else if !config.TrojanSSOption.Enabled {
+		} else if !config.TrojanSSOption.Enabled && !config.AllowInsecure {
 			_ = l.Close()
-			return nil, errors.New("disallow using Trojan without both certificates/reality/ss config")
+			return nil, errors.New("disallow using Trojan without both certificates/reality/ss/allow-insecure config")
 		}
 		sl.listeners = append(sl.listeners, l)
 
