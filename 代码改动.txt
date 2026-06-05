@@ -111,3 +111,11 @@
 - 新增回归测试覆盖截断 HTTP 响应重试成功、禁止下载时 HTTPVehicle/geodata 不发请求、GEO runner 初始更新失败后仍保持运行并可随 context 取消退出，以及过期 GEO 初始更新失败后会持续重试直到成功。
 - 提交并推送：`8c8e499e fix: harden resource update downloads` 和 `266bd856 fix: retry stale geo database updates` 已推送到 `origin/Alpha`。
 - 验证：`rtk gofmt -w component\resource\vehicle.go component\resource\vehicle_test.go component\geodata\init.go component\geodata\init_test.go component\updater\update_geo.go component\updater\update_geo_test.go` 已执行；`rtk go test ./component/resource ./component/geodata ./component/updater` 通过；`rtk git diff --check` 通过。
+
+2026-06-06（resource/GEO 更新事件补充）
+
+- 新增 provider 自动更新通知 hook：`component/resource.Fetcher.updateWithLog()` 在 HTTP provider 后台自动拉取成功后调用 `SetProviderUpdatedHook()` 注册的回调；即使内容未变化也会通知，因为 `UpdatedAt()` 会刷新，调用方需要同步更新时间。
+- 新增 GEO 自动更新成功通知 hook：`updater.UpdateGeoDatabases()` 在本轮 GEO 数据库更新流程成功结束后调用 `SetGeoUpdatedHook()` 注册的回调，供外层应用刷新资源文件状态。
+- hook 默认为空，不改变 Mihomo 独立运行行为；FLClash 通过 bridge 注册回调，把 provider/GEO 自动更新结果转换成 UI 事件，避免 Flutter 侧靠轮询感知内核状态。
+- 提交并推送：`1c3b9355 feat: notify resource auto updates` 已推送到 `origin/Alpha`。
+- 验证：`rtk gofmt -w component\resource\fetcher.go component\updater\update_geo.go` 已执行；`rtk go test ./component/resource ./component/updater` 通过。
