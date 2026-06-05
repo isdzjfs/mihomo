@@ -358,12 +358,13 @@ type stream struct {
 	session *Session
 	id      uint32
 
-	mu          sync.Mutex
-	cond        *sync.Cond
-	closed      bool
-	closeErr    error
-	readBuf     []byte
-	queue       [][]byte
+	mu       sync.Mutex
+	cond     *sync.Cond
+	closed   bool
+	closeErr error
+	readBuf  []byte
+	queue    [][]byte
+	// queuedBytes includes unread bytes in readBuf and queue.
 	queuedBytes int
 
 	localAddr  net.Addr
@@ -384,22 +385,20 @@ func newStream(session *Session, id uint32) *stream {
 func (c *stream) enqueue(payload []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	for !c.closed && (c.queuedBytes+len(payload) > maxStreamQueuedBytes || len(c.queue) >= maxStreamQueuedFrames) {
+		c.cond.Wait()
+	}
 	if c.closed {
 		return io.ErrClosedPipe
 	}
-	if c.queuedBytes+len(payload) > maxStreamQueuedBytes {
-		return fmt.Errorf("stream queued bytes exceed limit: %d", maxStreamQueuedBytes)
-	}
-	if len(c.queue) >= maxStreamQueuedFrames {
-		return fmt.Errorf("stream queued frames exceed limit: %d", maxStreamQueuedFrames)
-	}
+	c.queuedBytes += len(payload)
 	if len(c.readBuf) == 0 && len(c.queue) == 0 {
 		c.readBuf = payload
 	} else {
 		c.queue = append(c.queue, payload)
 	}
-	c.queuedBytes += len(payload)
-	c.cond.Signal()
+	c.cond.Broadcast()
 	return nil
 }
 
@@ -444,7 +443,11 @@ func (c *stream) Read(p []byte) (int, error) {
 	}
 	if len(c.readBuf) == 0 && len(c.queue) > 0 {
 		c.readBuf = c.queue[0]
+		c.queue[0] = nil
 		c.queue = c.queue[1:]
+		if len(c.queue) == 0 {
+			c.queue = nil
+		}
 	}
 	if len(c.readBuf) == 0 && c.closed {
 		if c.closeErr == nil {
@@ -455,7 +458,14 @@ func (c *stream) Read(p []byte) (int, error) {
 
 	n := copy(p, c.readBuf)
 	c.readBuf = c.readBuf[n:]
+	if len(c.readBuf) == 0 {
+		c.readBuf = nil
+	}
 	c.queuedBytes -= n
+	if c.queuedBytes < 0 {
+		c.queuedBytes = 0
+	}
+	c.cond.Broadcast()
 	return n, nil
 }
 
