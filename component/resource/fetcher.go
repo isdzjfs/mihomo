@@ -18,6 +18,26 @@ import (
 
 type Parser[V any] func([]byte) (V, error)
 
+var providerUpdatedHook struct {
+	sync.RWMutex
+	fn func(name string)
+}
+
+func SetProviderUpdatedHook(fn func(name string)) {
+	providerUpdatedHook.Lock()
+	defer providerUpdatedHook.Unlock()
+	providerUpdatedHook.fn = fn
+}
+
+func notifyProviderUpdated(name string) {
+	providerUpdatedHook.RLock()
+	fn := providerUpdatedHook.fn
+	providerUpdatedHook.RUnlock()
+	if fn != nil {
+		fn(name)
+	}
+}
+
 type Fetcher[V any] struct {
 	ctx          context.Context
 	ctxCancel    context.CancelFunc
@@ -263,6 +283,8 @@ func (f *Fetcher[V]) updateWithLog() {
 		log.Errorln("[Provider] %s pull error: %s", f.Name(), err.Error())
 		return
 	}
+
+	notifyProviderUpdated(f.Name())
 
 	if same {
 		log.Debugln("[Provider] %s's content doesn't change", f.Name())

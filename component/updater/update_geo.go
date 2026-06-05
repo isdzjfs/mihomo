@@ -29,6 +29,11 @@ var (
 	updatingGeo atomic.Bool
 )
 
+var geoUpdatedHook struct {
+	sync.RWMutex
+	fn func()
+}
+
 var geoUpdateRetryBackoffForRunner = geoUpdateRetryBackoff
 
 type geoUpdateConfig struct {
@@ -69,6 +74,21 @@ func ConfigureGeoUpdater(newAutoUpdate bool, newGeoUpdateInterval int) {
 		autoUpdate:     newAutoUpdate,
 		updateInterval: newGeoUpdateInterval,
 	})
+}
+
+func SetGeoUpdatedHook(fn func()) {
+	geoUpdatedHook.Lock()
+	defer geoUpdatedHook.Unlock()
+	geoUpdatedHook.fn = fn
+}
+
+func notifyGeoUpdated() {
+	geoUpdatedHook.RLock()
+	fn := geoUpdatedHook.fn
+	geoUpdatedHook.RUnlock()
+	if fn != nil {
+		fn()
+	}
 }
 
 func configureGeoUpdater(config geoUpdateConfig) {
@@ -265,6 +285,8 @@ func UpdateGeoDatabases() error {
 		log.Errorln("[GEO] update GEO database error: %s", err.Error())
 		return err
 	}
+
+	notifyGeoUpdated()
 
 	return nil
 }
