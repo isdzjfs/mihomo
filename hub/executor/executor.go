@@ -45,6 +45,8 @@ import (
 
 var mux sync.Mutex
 
+var DefaultProviderLoadedHook func(name string)
+
 func readConfig(path string) ([]byte, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil, err
@@ -382,6 +384,10 @@ func loadProvider[T P.Provider](providers map[string]T) error {
 			log.Infoln("Start initial compatible provider %s", name)
 		} else {
 			log.Infoln("Start initial provider %s", name)
+		}
+
+		if DefaultProviderLoadedHook != nil {
+			DefaultProviderLoadedHook(name)
 		}
 
 		if err := pv.Initial(); err != nil {

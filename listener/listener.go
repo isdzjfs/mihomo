@@ -976,3 +976,88 @@ func closeTunListener() {
 func Cleanup() {
 	closeTunListener()
 }
+
+func StopListener() {
+	httpMux.Lock()
+	if httpListener != nil {
+		httpListener.Close()
+		httpListener = nil
+	}
+	httpMux.Unlock()
+
+	socksMux.Lock()
+	if socksListener != nil {
+		socksListener.Close()
+		socksListener = nil
+	}
+	if socksUDPListener != nil {
+		socksUDPListener.Close()
+		socksUDPListener = nil
+	}
+	socksMux.Unlock()
+
+	redirMux.Lock()
+	if redirListener != nil {
+		redirListener.Close()
+		redirListener = nil
+	}
+	if redirUDPListener != nil {
+		redirUDPListener.Close()
+		redirUDPListener = nil
+	}
+	redirMux.Unlock()
+
+	tproxyMux.Lock()
+	if tproxyListener != nil {
+		tproxyListener.Close()
+		tproxyListener = nil
+	}
+	if tproxyUDPListener != nil {
+		tproxyUDPListener.Close()
+		tproxyUDPListener = nil
+	}
+	tproxyMux.Unlock()
+
+	mixedMux.Lock()
+	if mixedListener != nil {
+		mixedListener.Close()
+		mixedListener = nil
+	}
+	if mixedUDPLister != nil {
+		mixedUDPLister.Close()
+		mixedUDPLister = nil
+	}
+	mixedMux.Unlock()
+
+	tunMux.Lock()
+	closeTunListener()
+	tunMux.Unlock()
+
+	ssMux.Lock()
+	if shadowSocksListener != nil {
+		shadowSocksListener.Close()
+		shadowSocksListener = nil
+	}
+	ssMux.Unlock()
+
+	vmessMux.Lock()
+	if vmessListener != nil {
+		vmessListener.Close()
+		vmessListener = nil
+	}
+	vmessMux.Unlock()
+
+	tuicMux.Lock()
+	if tuicListener != nil {
+		tuicListener.Close()
+		tuicListener = nil
+	}
+	tuicMux.Unlock()
+
+	inboundMux.Lock()
+	for name, l := range inboundListeners {
+		l.Close()
+		delete(inboundListeners, name)
+	}
+	inboundMux.Unlock()
+}

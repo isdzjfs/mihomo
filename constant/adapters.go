@@ -54,7 +54,7 @@ const (
 	GostRelay
 )
 
-const (
+var (
 	DefaultTCPTimeout = dialer.DefaultTCPTimeout
 	DefaultUDPTimeout = dialer.DefaultUDPTimeout
 	DefaultDropTime   = 12 * DefaultTCPTimeout

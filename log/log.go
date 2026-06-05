@@ -44,6 +44,12 @@ func Infoln(format string, v ...any) {
 	print(event)
 }
 
+func Info2ln(format string, v ...any) {
+	event := newLog(INFO2, format, v...)
+	logCh <- event
+	print(event)
+}
+
 func Warnln(format string, v ...any) {
 	event := newLog(WARNING, format, v...)
 	logCh <- event
@@ -127,6 +133,8 @@ func print(data Event) {
 
 	switch data.LogLevel {
 	case INFO:
+		log.Infoln(data.Payload)
+	case INFO2:
 		log.Infoln(data.Payload)
 	case WARNING:
 		log.Warnln(data.Payload)

@@ -9,7 +9,9 @@ import (
 var LogLevelMapping = map[string]LogLevel{
 	ERROR.String():   ERROR,
 	WARNING.String(): WARNING,
+	"warn":           WARNING,
 	INFO.String():    INFO,
+	INFO2.String():   INFO2,
 	DEBUG.String():   DEBUG,
 	SILENT.String():  SILENT,
 }
@@ -17,6 +19,7 @@ var LogLevelMapping = map[string]LogLevel{
 const (
 	DEBUG LogLevel = iota
 	INFO
+	INFO2
 	WARNING
 	ERROR
 	SILENT
@@ -43,6 +46,8 @@ func (l LogLevel) String() string {
 	switch l {
 	case INFO:
 		return "info"
+	case INFO2:
+		return "info2"
 	case WARNING:
 		return "warning"
 	case ERROR:

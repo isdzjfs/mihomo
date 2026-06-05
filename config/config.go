@@ -685,18 +685,21 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 
 	log.Infoln("Geodata Loader mode: %s", geodata.LoaderName())
 	log.Infoln("Geosite Matcher implementation: %s", geodata.SiteMatcherName())
+	log.Infoln("Parse rule providers start")
 	ruleProviders, err := parseRuleProviders(rawCfg)
 	if err != nil {
 		return nil, err
 	}
 	config.RuleProviders = ruleProviders
 
+	log.Infoln("Parse sub-rules start")
 	subRules, err := parseSubRules(rawCfg, proxies, ruleProviders)
 	if err != nil {
 		return nil, err
 	}
 	config.SubRules = subRules
 
+	log.Infoln("Parse rules start")
 	rules, err := parseRules(rawCfg.Rule, proxies, ruleProviders, subRules, "rules")
 	if err != nil {
 		return nil, err
@@ -711,12 +714,14 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 
 	parseIPV6(rawCfg) // must before DNS and Tun
 
+	log.Infoln("Parse DNS start")
 	dnsCfg, err := parseDNS(rawCfg, ruleProviders)
 	if err != nil {
 		return nil, err
 	}
 	config.DNS = dnsCfg
 
+	log.Infoln("Parse TUN start")
 	err = parseTun(rawCfg.Tun, dnsCfg, config.General)
 	if err != nil {
 		return nil, err
@@ -739,6 +744,7 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 		}
 	}
 
+	log.Infoln("Parse sniffer start")
 	config.Sniffer, err = parseSniffer(rawCfg.Sniffer, ruleProviders)
 	if err != nil {
 		return nil, err
@@ -991,6 +997,7 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 		return nil, nil, err
 	}
 
+	SetProxyNameList(proxyList)
 	return proxies, providersMap, nil
 }
 
