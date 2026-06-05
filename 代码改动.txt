@@ -101,3 +101,13 @@
 - 新增回归测试覆盖手动选择死节点 fallback、`url-test` all-dead 预热不触发 health-check，以及 listener/DNS 同端口通配地址冲突判断。
 - 提交并推送：`30012329 fix: address proxy group and listener regressions` 已推送到 `origin/Alpha`。
 - 验证：`rtk go test ./adapter/outboundgroup` 通过；`rtk go test ./listener ./dns` 通过；`rtk go test ./...` 通过，175 个包共 4442 个测试通过；`rtk git diff --check` 通过。
+
+2026-06-05（GEO 自动更新修复补充）
+
+- 修复 GEO 自动更新启动阶段下载失败后后台 updater 直接退出的问题：过期数据库启动刷新失败现在只记录错误并保留 ticker，后续仍会按 `geo-update-interval` 继续重试。
+- 为 HTTP 资源下载增加 EOF 类临时错误的有限重试：`HTTPVehicle.Read()` 抽出单次读取逻辑，对 `EOF` / `unexpected EOF` / `: EOF` 这类响应体提前中断错误最多重试 3 次，降低 GitHub release 下载链路瞬断导致资源更新失败的概率。
+- 补齐 `downloadAllowed` 覆盖缺口：`geodata.downloadToPath()`、`resource.HTTPVehicle.Read()` 和 HTTP provider `Fetcher` 现在都会尊重 `SetDownloadAllowed(false)`，避免 FLClash 在 VPN/内层隧道未就绪时提前直连下载 GEO 或 provider 资源。
+- 修复过期 GEO 启动更新失败后仍需等待完整 `geo-update-interval` 的问题：`runGeoUpdater()` 现在对过期数据库的启动刷新和后续 ticker 刷新都走 `updateGeoDatabasesWithRetry()`，失败后按 10 秒、30 秒、1 分钟、5 分钟、10 分钟、30 分钟封顶的退避节奏继续重试，成功后再回到正常周期。
+- 新增回归测试覆盖截断 HTTP 响应重试成功、禁止下载时 HTTPVehicle/geodata 不发请求、GEO runner 初始更新失败后仍保持运行并可随 context 取消退出，以及过期 GEO 初始更新失败后会持续重试直到成功。
+- 提交并推送：`8c8e499e fix: harden resource update downloads` 和 `266bd856 fix: retry stale geo database updates` 已推送到 `origin/Alpha`。
+- 验证：`rtk gofmt -w component\resource\vehicle.go component\resource\vehicle_test.go component\geodata\init.go component\geodata\init_test.go component\updater\update_geo.go component\updater\update_geo_test.go` 已执行；`rtk go test ./component/resource ./component/geodata ./component/updater` 通过；`rtk git diff --check` 通过。
