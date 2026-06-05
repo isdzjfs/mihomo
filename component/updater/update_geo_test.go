@@ -68,3 +68,62 @@ func TestRunGeoUpdaterContinuesAfterInitialUpdateError(t *testing.T) {
 		t.Fatal("runGeoUpdater did not stop after context cancellation")
 	}
 }
+
+func TestRunGeoUpdaterRetriesInitialUpdateUntilSuccess(t *testing.T) {
+	oldHomeDir := C.Path.HomeDir()
+	C.SetHomeDir(t.TempDir())
+	t.Cleanup(func() {
+		C.SetHomeDir(oldHomeDir)
+	})
+
+	mmdbPath := C.Path.MMDB()
+	if err := os.WriteFile(mmdbPath, []byte("stale"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	staleTime := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(mmdbPath, staleTime, staleTime); err != nil {
+		t.Fatalf("Chtimes() error = %v", err)
+	}
+
+	oldUpdateGeoDatabasesForRunner := updateGeoDatabasesForRunner
+	oldGeoUpdateRetryBackoffForRunner := geoUpdateRetryBackoffForRunner
+	var attempts atomic.Int32
+	updateGeoDatabasesForRunner = func() error {
+		if attempts.Add(1) < 3 {
+			return errors.New("download failed")
+		}
+		return nil
+	}
+	geoUpdateRetryBackoffForRunner = func(int) time.Duration {
+		return 10 * time.Millisecond
+	}
+	t.Cleanup(func() {
+		updateGeoDatabasesForRunner = oldUpdateGeoDatabasesForRunner
+		geoUpdateRetryBackoffForRunner = oldGeoUpdateRetryBackoffForRunner
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		runGeoUpdater(ctx, 1)
+		close(done)
+	}()
+
+	deadline := time.After(time.Second)
+	for attempts.Load() < 3 {
+		select {
+		case <-done:
+			t.Fatal("runGeoUpdater returned before initial update succeeded")
+		case <-deadline:
+			t.Fatal("timed out waiting for retry success")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runGeoUpdater did not stop after context cancellation")
+	}
+}

@@ -29,6 +29,8 @@ var (
 	updatingGeo atomic.Bool
 )
 
+var geoUpdateRetryBackoffForRunner = geoUpdateRetryBackoff
+
 type geoUpdateConfig struct {
 	autoUpdate     bool
 	updateInterval int
@@ -267,6 +269,40 @@ func UpdateGeoDatabases() error {
 	return nil
 }
 
+func geoUpdateRetryBackoff(attempt int) time.Duration {
+	retryIntervals := []time.Duration{
+		10 * time.Second,
+		30 * time.Second,
+		time.Minute,
+		5 * time.Minute,
+		10 * time.Minute,
+		30 * time.Minute,
+	}
+	if attempt < len(retryIntervals) {
+		return retryIntervals[attempt]
+	}
+	return retryIntervals[len(retryIntervals)-1]
+}
+
+func updateGeoDatabasesWithRetry(ctx context.Context) bool {
+	for attempt := 0; ; attempt++ {
+		if err := updateGeoDatabasesForRunner(); err != nil {
+			log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
+			retryAfter := geoUpdateRetryBackoffForRunner(attempt)
+			log.Warnln("[GEO] Retry GEO database update after %s", retryAfter)
+			timer := time.NewTimer(retryAfter)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return false
+			case <-timer.C:
+				continue
+			}
+		}
+		return true
+	}
+}
+
 func getUpdateTime() (time time.Time, err error) {
 	filesToCheck := []string{
 		C.Path.GeoIP(),
@@ -291,8 +327,7 @@ func RegisterGeoUpdater() {
 }
 
 func runGeoUpdater(ctx context.Context, updateInterval int) {
-	ticker := time.NewTicker(time.Duration(updateInterval) * time.Hour)
-	defer ticker.Stop()
+	interval := time.Duration(updateInterval) * time.Hour
 
 	lastUpdate, err := getUpdateTime()
 	if err != nil {
@@ -301,12 +336,15 @@ func runGeoUpdater(ctx context.Context, updateInterval int) {
 	}
 
 	log.Infoln("[GEO] last update time %s", lastUpdate)
-	if lastUpdate.Add(time.Duration(updateInterval) * time.Hour).Before(time.Now()) {
-		log.Infoln("[GEO] Database has not been updated for %v, update now", time.Duration(updateInterval)*time.Hour)
-		if err := updateGeoDatabasesForRunner(); err != nil {
-			log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
+	if lastUpdate.Add(interval).Before(time.Now()) {
+		log.Infoln("[GEO] Database has not been updated for %v, update now", interval)
+		if !updateGeoDatabasesWithRetry(ctx) {
+			return
 		}
 	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
 
 	for {
 		select {
@@ -314,8 +352,8 @@ func runGeoUpdater(ctx context.Context, updateInterval int) {
 			return
 		case <-ticker.C:
 			log.Infoln("[GEO] updating database every %d hours", updateInterval)
-			if err := updateGeoDatabasesForRunner(); err != nil {
-				log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
+			if !updateGeoDatabasesWithRetry(ctx) {
+				return
 			}
 		}
 	}
