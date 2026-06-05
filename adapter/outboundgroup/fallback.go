@@ -78,6 +78,11 @@ func (f *Fallback) ListenPacketContext(ctx context.Context, metadata *C.Metadata
 	pc, err := proxy.ListenPacketContext(ctx, metadata)
 	if err == nil {
 		pc.AppendToChains(f)
+	} else {
+		selected := f.getSelected()
+		if selected == "" && proxy.Type() != C.Vless {
+			f.onDialFailed(proxy.Type(), err, f.healthCheck)
+		}
 	}
 
 	return pc, err

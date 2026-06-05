@@ -46,6 +46,9 @@ func NewSubscriptionInfo(userinfo string) (si *SubscriptionInfo) {
 }
 
 func parseValue(value string) (int64, error) {
+	if value == "" {
+		return 0, nil
+	}
 	if intValue, err := strconv.ParseInt(value, 10, 64); err == nil {
 		return intValue, nil
 	}

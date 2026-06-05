@@ -151,6 +151,10 @@ func (pp *proxySetProvider) Name() string {
 	return pp.Fetcher.Name()
 }
 
+func (pp *ProxySetProvider) GetSubscriptionInfo() *SubscriptionInfo {
+	return pp.subscriptionInfo
+}
+
 func (pp *proxySetProvider) Update() error {
 	_, _, err := pp.Fetcher.Update()
 	return err

@@ -22,6 +22,8 @@ import (
 
 var UnifiedDelay = atomic.NewBool(false)
 
+var UrlTestHook func(url string, name string, delay uint16)
+
 const (
 	defaultHistoriesNum = 10
 )
@@ -197,6 +199,9 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 			state.history.Pop()
 		}
 
+		if UrlTestHook != nil {
+			UrlTestHook(url, p.Name(), t)
+		}
 	}()
 
 	unifiedDelay := UnifiedDelay.Load()
