@@ -245,6 +245,8 @@ func updateGeoDatabases() error {
 
 var ErrGetDatabaseUpdateSkip = errors.New("GEO database is updating, skip")
 
+var updateGeoDatabasesForRunner = UpdateGeoDatabases
+
 func UpdateGeoDatabases() error {
 	log.Infoln("[GEO] Start updating GEO database")
 
@@ -301,9 +303,8 @@ func runGeoUpdater(ctx context.Context, updateInterval int) {
 	log.Infoln("[GEO] last update time %s", lastUpdate)
 	if lastUpdate.Add(time.Duration(updateInterval) * time.Hour).Before(time.Now()) {
 		log.Infoln("[GEO] Database has not been updated for %v, update now", time.Duration(updateInterval)*time.Hour)
-		if err := UpdateGeoDatabases(); err != nil {
+		if err := updateGeoDatabasesForRunner(); err != nil {
 			log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
-			return
 		}
 	}
 
@@ -313,7 +314,7 @@ func runGeoUpdater(ctx context.Context, updateInterval int) {
 			return
 		case <-ticker.C:
 			log.Infoln("[GEO] updating database every %d hours", updateInterval)
-			if err := UpdateGeoDatabases(); err != nil {
+			if err := updateGeoDatabasesForRunner(); err != nil {
 				log.Errorln("[GEO] Failed to update GEO database: %s", err.Error())
 			}
 		}

@@ -91,6 +91,10 @@ func (f *Fetcher[V]) Initial() (V, error) {
 }
 
 func (f *Fetcher[V]) Update() (V, bool, error) {
+	if f.vehicle.Type() == P.HTTP && !downloadAllowed.Load() {
+		return lo.Empty[V](), false, ErrDownloadDeferred
+	}
+
 	f.loadBufMutex.Lock()
 	oldHash := f.hash
 	f.loadBufMutex.Unlock()
@@ -238,6 +242,9 @@ func (f *Fetcher[V]) startPullLoop(forceUpdate bool) (err error) {
 			return err
 		}
 	} else if f.interval > 0 {
+		if f.vehicle.Type() == P.HTTP && !downloadAllowed.Load() {
+			return nil
+		}
 		go f.pullLoop(forceUpdate)
 	}
 	return

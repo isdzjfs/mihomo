@@ -2,6 +2,7 @@ package geodata
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,15 +27,26 @@ var (
 	initGeoIPMutex   sync.Mutex
 	initASNMutex     sync.Mutex
 
-	geoIpEnable   atomic.Bool
-	geoSiteEnable atomic.Bool
-	asnEnable     atomic.Bool
+	geoIpEnable     atomic.Bool
+	geoSiteEnable   atomic.Bool
+	asnEnable       atomic.Bool
+	downloadAllowed = atomic.NewBool(true)
 
 	geoIpUrl   string
 	mmdbUrl    string
 	geoSiteUrl string
 	asnUrl     string
 )
+
+var ErrDownloadDeferred = errors.New("geo data download deferred until VPN service is started")
+
+func SetDownloadAllowed(allowed bool) func() {
+	previous := downloadAllowed.Load()
+	downloadAllowed.Store(allowed)
+	return func() {
+		downloadAllowed.Store(previous)
+	}
+}
 
 func GeoIpUrl() string {
 	return geoIpUrl
@@ -69,6 +81,9 @@ func SetASNUrl(url string) {
 }
 
 func downloadToPath(url string, path string) (err error) {
+	if !downloadAllowed.Load() {
+		return ErrDownloadDeferred
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*90)
 	defer cancel()
 	resp, err := mihomoHttp.HttpRequest(ctx, url, http.MethodGet, nil, nil)

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
@@ -20,13 +21,19 @@ import (
 const (
 	DefaultHttpTimeout = time.Second * 20
 
+	httpVehicleReadMaxAttempts = 3
+	httpVehicleRetryDelay      = 200 * time.Millisecond
+
 	fileMode os.FileMode = 0o666
 	dirMode  os.FileMode = 0o755
 )
 
 var (
-	etag = atomic.NewBool(false)
+	etag            = atomic.NewBool(false)
+	downloadAllowed = atomic.NewBool(true)
 )
+
+var ErrDownloadDeferred = errors.New("resource download deferred until VPN service is started")
 
 func ETag() bool {
 	return etag.Load()
@@ -34,6 +41,14 @@ func ETag() bool {
 
 func SetETag(b bool) {
 	etag.Store(b)
+}
+
+func SetDownloadAllowed(allowed bool) func() {
+	previous := downloadAllowed.Load()
+	downloadAllowed.Store(allowed)
+	return func() {
+		downloadAllowed.Store(previous)
+	}
 }
 
 func safeWrite(path string, buf []byte) error {
@@ -121,6 +136,22 @@ func (h *HTTPVehicle) SetInRead(fn func(response *http.Response)) {
 }
 
 func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []byte, hash utils.HashType, err error) {
+	if !downloadAllowed.Load() {
+		return nil, oldHash, ErrDownloadDeferred
+	}
+	for attempt := 0; attempt < httpVehicleReadMaxAttempts; attempt++ {
+		buf, hash, err = h.readOnce(ctx, oldHash)
+		if err == nil || !isHTTPVehicleReadRetryable(err) || attempt == httpVehicleReadMaxAttempts-1 {
+			return
+		}
+		if err = sleepHTTPVehicleReadRetry(ctx); err != nil {
+			return
+		}
+	}
+	return
+}
+
+func (h *HTTPVehicle) readOnce(ctx context.Context, oldHash utils.HashType) (buf []byte, hash utils.HashType, err error) {
 	ctx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 	header := h.header
@@ -171,6 +202,30 @@ func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []b
 		})
 	}
 	return
+}
+
+func isHTTPVehicleReadRetryable(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	// Some transports wrap EOF as plain text, especially on truncated release downloads.
+	message := strings.ToLower(err.Error())
+	return message == "eof" || strings.Contains(message, "unexpected eof") || strings.HasSuffix(message, ": eof")
+}
+
+func sleepHTTPVehicleReadRetry(ctx context.Context) error {
+	timer := time.NewTimer(httpVehicleRetryDelay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func NewHTTPVehicle(url string, path string, proxy string, header http.Header, timeout time.Duration, sizeLimit int64) *HTTPVehicle {
