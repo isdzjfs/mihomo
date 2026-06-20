@@ -104,22 +104,27 @@ func (f *Fetcher[V]) Initial() (V, error) {
 		if file, fErr := f.bundleFile(); fErr == nil {
 			defer file.Close()
 			buf, err := io.ReadAll(file)
-			var modTime time.Time
-			if stat, sErr := file.Stat(); sErr == nil {
-				modTime = stat.ModTime()
-			}
-			contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), true)
-			f.updatedAt = modTime // reset updatedAt to file's modTime
-
 			if err == nil {
-				log.Infoln("[Provider] %s extract successful from bundle file", f.Name())
-				err = f.startPullLoop(time.Since(modTime) > f.interval)
-				if err != nil {
-					return lo.Empty[V](), err
+				var modTime time.Time
+				if stat, sErr := file.Stat(); sErr == nil {
+					modTime = stat.ModTime()
 				}
-				return contents, nil
+				contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), true)
+				f.updatedAt = modTime // reset updatedAt to file's modTime
+
+				if err != nil {
+					log.Warnln("[Provider] %s read bundle file error: %s", f.Name(), err.Error())
+				} else {
+					log.Infoln("[Provider] %s extract successful from bundle file", f.Name())
+					err = f.startPullLoop(time.Since(modTime) > f.interval)
+					if err != nil {
+						return lo.Empty[V](), err
+					}
+					return contents, nil
+				}
+			} else {
+				log.Warnln("[Provider] %s read bundle file error: %s", f.Name(), err.Error())
 			}
-			log.Warnln("[Provider] %s read bundle file error: %s", f.Name(), err.Error())
 		} else {
 			log.Warnln("[Provider] %s read bundle file error: %s", f.Name(), fErr.Error())
 		}

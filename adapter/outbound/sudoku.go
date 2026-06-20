@@ -65,8 +65,7 @@ func (s *Sudoku) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Con
 		return nil, err
 	}
 
-	muxMode := normalizeHTTPMaskMultiplex(cfg.HTTPMaskMultiplex)
-	if muxMode == "on" {
+	if shouldUseHTTPMaskMultiplex(cfg) {
 		stream, muxErr := s.dialMultiplex(ctx, cfg.TargetAddress)
 		if muxErr == nil {
 			return NewConn(stream, s), nil
@@ -268,6 +267,22 @@ func httpTunnelModeEnabled(mode string) bool {
 	default:
 		return false
 	}
+}
+
+func httpMaskMultiplexModeEnabled(mode string) bool {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "stream", "poll", "auto":
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldUseHTTPMaskMultiplex(cfg *sudoku.ProtocolConfig) bool {
+	return cfg != nil &&
+		normalizeHTTPMaskMultiplex(cfg.HTTPMaskMultiplex) == "on" &&
+		!cfg.DisableHTTPMask &&
+		httpMaskMultiplexModeEnabled(cfg.HTTPMaskMode)
 }
 
 func (s *Sudoku) dialAndHandshake(ctx context.Context, cfg *sudoku.ProtocolConfig) (_ net.Conn, err error) {
