@@ -10,6 +10,10 @@ import (
 	P "github.com/metacubex/mihomo/constant/provider"
 )
 
+type SelectorOption struct {
+	DefaultSelected string `group:"default-selected,omitempty"`
+}
+
 type Selector struct {
 	*GroupBase
 	stateMux   sync.RWMutex
@@ -130,7 +134,7 @@ func (s *Selector) Proxies() []C.Proxy {
 	return s.GetProxies(false)
 }
 
-func NewSelector(option *GroupCommonOption, emptyFallback C.Proxy, providers []P.ProxyProvider) (*Selector, error) {
+func NewSelector(option GroupCommonOption, selectorOption SelectorOption, emptyFallback C.Proxy, providers []P.ProxyProvider) (*Selector, error) {
 	groupBase, err := NewGroupBase(GroupBaseOption{
 		Name:           option.Name,
 		Type:           C.Selector,
@@ -148,9 +152,14 @@ func NewSelector(option *GroupCommonOption, emptyFallback C.Proxy, providers []P
 		return nil, err
 	}
 
+	selected := selectorOption.DefaultSelected
+	if selected == "" {
+		selected = emptyFallback.Name()
+	}
+
 	return &Selector{
 		GroupBase:  groupBase,
-		selected:   emptyFallback.Name(),
+		selected:   selected,
 		disableUDP: option.DisableUDP,
 		testUrl:    option.URL,
 	}, nil

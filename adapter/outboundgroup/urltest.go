@@ -18,12 +18,8 @@ import (
 	"github.com/metacubex/mihomo/tunnel/statistic"
 )
 
-type urlTestOption func(*URLTest)
-
-func urlTestWithTolerance(tolerance uint16) urlTestOption {
-	return func(u *URLTest) {
-		u.tolerance = tolerance
-	}
+type URLTestOption struct {
+	Tolerance uint16 `group:"tolerance,omitempty"`
 }
 
 type URLTest struct {
@@ -349,20 +345,10 @@ func (u *URLTest) URLTest(ctx context.Context, url string, expectedStatus utils.
 	return delays, err
 }
 
-func parseURLTestOption(config map[string]any) []urlTestOption {
-	opts := []urlTestOption{}
-
-	// tolerance
-	if elm, ok := config["tolerance"]; ok {
-		if tolerance, ok := elm.(int); ok {
-			opts = append(opts, urlTestWithTolerance(uint16(tolerance)))
-		}
+func NewURLTest(option GroupCommonOption, urlTestOption URLTestOption, emptyFallback C.Proxy, providers []P.ProxyProvider) (*URLTest, error) {
+	if emptyFallback == nil {
+		return nil, errors.New("empty fallback proxy not exist")
 	}
-
-	return opts
-}
-
-func NewURLTest(option *GroupCommonOption, emptyFallback C.Proxy, providers []P.ProxyProvider, options ...urlTestOption) (*URLTest, error) {
 	groupBase, err := NewGroupBase(GroupBaseOption{
 		Name:           option.Name,
 		Type:           C.URLTest,
@@ -386,10 +372,7 @@ func NewURLTest(option *GroupCommonOption, emptyFallback C.Proxy, providers []P.
 		disableUDP:     option.DisableUDP,
 		testUrl:        option.URL,
 		expectedStatus: option.ExpectedStatus,
-	}
-
-	for _, option := range options {
-		option(urlTest)
+		tolerance:      urlTestOption.Tolerance,
 	}
 
 	return urlTest, nil

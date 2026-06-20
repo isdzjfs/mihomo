@@ -133,7 +133,8 @@ func TestURLTestDoesNotKeepCurrentNodeWhenAliveStateFlapsAfterScan(t *testing.T)
 	}
 
 	group, err := NewURLTest(
-		&GroupCommonOption{Name: "auto", URL: testURL},
+		GroupCommonOption{Name: "auto", URL: testURL},
+		URLTestOption{},
 		aliveC,
 		[]P.ProxyProvider{&urlTestProvider{
 			name:    "provider",
@@ -166,7 +167,8 @@ func TestURLTestClosesConnectionsWhenCurrentNodeTurnsDeadWithoutAlternative(t *t
 	}
 
 	group, err := NewURLTest(
-		&GroupCommonOption{Name: "auto", URL: testURL},
+		GroupCommonOption{Name: "auto", URL: testURL},
+		URLTestOption{},
 		deadA,
 		[]P.ProxyProvider{&urlTestProvider{
 			name:    "provider",
@@ -229,7 +231,8 @@ func TestURLTestDiscardsConnectionDialedByStaleNode(t *testing.T) {
 
 	var err error
 	group, err = NewURLTest(
-		&GroupCommonOption{Name: "auto", URL: testURL},
+		GroupCommonOption{Name: "auto", URL: testURL},
+		URLTestOption{},
 		staleA,
 		[]P.ProxyProvider{&urlTestProvider{
 			name:    "provider",
@@ -268,7 +271,8 @@ func TestURLTestManualSelectedDeadNodeFallsBackToAliveNode(t *testing.T) {
 	}
 
 	group, err := NewURLTest(
-		&GroupCommonOption{Name: "auto", URL: testURL},
+		GroupCommonOption{Name: "auto", URL: testURL},
+		URLTestOption{},
 		aliveB,
 		[]P.ProxyProvider{&urlTestProvider{
 			name:    "provider",
@@ -297,7 +301,8 @@ func TestURLTestPreheatDoesNotTriggerHealthCheckWhenAllNodesDead(t *testing.T) {
 	}
 
 	group, err := NewURLTest(
-		&GroupCommonOption{Name: "auto", URL: testURL},
+		GroupCommonOption{Name: "auto", URL: testURL},
+		URLTestOption{},
 		deadA,
 		[]P.ProxyProvider{provider},
 	)
@@ -325,7 +330,8 @@ func TestFallbackManualSelectedDeadNodeFallsBackToAliveNode(t *testing.T) {
 	aliveB := &parserTestProxy{name: "B", typ: C.Socks5}
 
 	group, err := NewFallback(
-		&GroupCommonOption{Name: "fallback", URL: testURL},
+		GroupCommonOption{Name: "fallback", URL: testURL},
+		FallbackOption{},
 		aliveB,
 		[]P.ProxyProvider{&urlTestProvider{
 			name:    "provider",

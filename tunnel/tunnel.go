@@ -28,6 +28,8 @@ import (
 	icontext "github.com/metacubex/mihomo/context"
 	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel/statistic"
+
+	"golang.org/x/exp/slices"
 )
 
 const (
@@ -688,41 +690,76 @@ func cloneMap[K comparable, V any](src map[K]V) map[K]V {
 
 func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, error) {
 	configMux.RLock()
-	rulesSnapshot := getRules(metadata)
-	rulesSnapshot = append([]C.Rule(nil), rulesSnapshot...)
+	rulesSnapshot := append([]C.Rule(nil), rules...)
+	subRulesSnapshot := make(map[string][]C.Rule, len(subRules))
+	for name, sr := range subRules {
+		subRulesSnapshot[name] = append([]C.Rule(nil), sr...)
+	}
 	proxiesSnapshot := cloneMap(proxies)
 	configMux.RUnlock()
 
-	for _, rule := range rulesSnapshot {
-		if matched, ada := rule.Match(metadata, helper); matched {
-			adapter, ok := proxiesSnapshot[ada]
-			if !ok {
-				continue
-			}
-
-			// parse multi-layer nesting
-			passed := false
-			for adapter := adapter; adapter != nil; adapter = adapter.Unwrap(metadata, false) {
-				if adapter.Type() == C.Pass {
-					passed = true
-					break
-				}
-			}
-			if passed {
-				log.Debugln("%s match Pass rule", adapter.Name())
-				continue
-			}
-
-			if metadata.NetWork == C.UDP && !adapter.SupportUDP() {
-				log.Debugln("%s UDP is not supported", adapter.Name())
-				continue
-			}
-
-			return adapter, rule, nil
+	getRulesSnapshot := func(metadata *C.Metadata) []C.Rule {
+		if sr, ok := subRulesSnapshot[metadata.SpecialRules]; ok {
+			log.Debugln("[Rule] use %s rules", metadata.SpecialRules)
+			return sr
 		}
+		log.Debugln("[Rule] use default rules")
+		return rulesSnapshot
 	}
 
-	return proxiesSnapshot["DIRECT"], nil, nil
+	var rematchChain []string
+	for {
+		var rematchProxy C.Proxy
+		var rematchRule C.Rule
+	GetRules:
+		for _, rule := range getRulesSnapshot(metadata) {
+			if matched, ada := rule.Match(metadata, helper); matched {
+				adapter, ok := proxiesSnapshot[ada]
+				if !ok {
+					continue
+				}
+
+				// parse multi-layer nesting
+				for adapter := adapter; adapter != nil; adapter = adapter.Unwrap(metadata, false) {
+					if adapter.Type() == C.Pass {
+						log.Debugln("%s match Pass rule", adapter.Name())
+						continue GetRules
+					}
+					if adapter.Type() == C.Rematch {
+						log.Debugln("%s match Rematch rule", adapter.Name())
+						rematchProxy = adapter
+						rematchRule = rule
+						break GetRules
+					}
+				}
+
+				if metadata.NetWork == C.UDP && !adapter.SupportUDP() {
+					log.Debugln("%s UDP is not supported", adapter.Name())
+					continue
+				}
+
+				return adapter, rule, nil
+			}
+		}
+		if rematchProxy != nil {
+			if slices.Contains(rematchChain, rematchProxy.Name()) {
+				log.Warnln("[Rule] rematch cycle detected on %s", rematchProxy.Name())
+				return rematchProxy, rematchRule, nil
+			}
+			rematchChain = append(rematchChain, rematchProxy.Name())
+			conn, err := rematchProxy.DialContext(context.Background(), metadata) // not a real connection, just for metadata update
+			if conn != nil {
+				_ = conn.Close()
+			}
+			if err != nil {
+				log.Warnln("[Rule] rematch proxy %s failed to update metadata: %s", rematchProxy.Name(), err)
+				return rematchProxy, rematchRule, nil
+			}
+			log.Debugln("[Rule] rematch proxy %s update metadata to rematch-name=%q sub-rule=%q", rematchProxy.Name(), metadata.InName, metadata.SpecialRules)
+			continue
+		}
+		return proxiesSnapshot["DIRECT"], nil, nil
+	}
 }
 
 func getRules(metadata *C.Metadata) []C.Rule {

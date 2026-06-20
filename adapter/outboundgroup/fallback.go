@@ -15,6 +15,8 @@ import (
 	"github.com/metacubex/mihomo/log"
 )
 
+type FallbackOption struct{}
+
 type Fallback struct {
 	*GroupBase
 	stateMux       sync.RWMutex
@@ -205,7 +207,7 @@ func (f *Fallback) Proxies() []C.Proxy {
 	return f.GetProxies(false)
 }
 
-func NewFallback(option *GroupCommonOption, emptyFallback C.Proxy, providers []P.ProxyProvider) (*Fallback, error) {
+func NewFallback(option GroupCommonOption, fallbackOption FallbackOption, emptyFallback C.Proxy, providers []P.ProxyProvider) (*Fallback, error) {
 	groupBase, err := NewGroupBase(GroupBaseOption{
 		Name:           option.Name,
 		Type:           C.Fallback,
@@ -223,6 +225,7 @@ func NewFallback(option *GroupCommonOption, emptyFallback C.Proxy, providers []P
 		return nil, err
 	}
 
+	_ = fallbackOption
 	return &Fallback{
 		GroupBase:      groupBase,
 		disableUDP:     option.DisableUDP,

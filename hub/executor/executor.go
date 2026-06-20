@@ -264,7 +264,7 @@ func updateDNS(c *config.DNS, generalIPv6 bool) error {
 		resolver.SetDefaultService(nil)
 		resolver.SetProxyServerHostResolver(nil)
 		resolver.SetDirectHostResolver(nil)
-		return dns.ReCreateServer("", nil)
+		return dns.ReCreateServer("", nil, nil)
 	}
 
 	ipv6 := c.IPv6 && generalIPv6
@@ -301,7 +301,9 @@ func updateDNS(c *config.DNS, generalIPv6 bool) error {
 
 	s := dns.NewService(r, m)
 
-	if err := dns.ReCreateServer(c.Listen, s); err != nil {
+	lc := inbound.NewListenConfig()
+	lc.SetRouteMark(c.ListenRoutingMark)
+	if err := dns.ReCreateServer(c.Listen, lc, s); err != nil {
 		return err
 	}
 
