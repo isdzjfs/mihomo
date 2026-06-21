@@ -369,6 +369,9 @@ func hello(w http.ResponseWriter, r *http.Request) {
 }
 
 func traffic(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	onlyProxy := query.Get("onlyProxy") == "true" || query.Get("onlyStatisticsProxy") == "true"
+
 	var wsConn net.Conn
 	if r.Header.Get("Upgrade") == "websocket" {
 		var err error
@@ -390,8 +393,8 @@ func traffic(w http.ResponseWriter, r *http.Request) {
 	var err error
 	for range tick.C {
 		buf.Reset()
-		up, down := t.Now()
-		upTotal, downTotal := t.Total()
+		up, down := t.NowTraffic(onlyProxy)
+		upTotal, downTotal := t.TotalTraffic(onlyProxy)
 		if err := json.NewEncoder(buf).Encode(Traffic{
 			Up:        up,
 			Down:      down,
