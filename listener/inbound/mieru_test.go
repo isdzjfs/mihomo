@@ -177,6 +177,9 @@ func TestNewMieru(t *testing.T) {
 	}
 }
 
+// Keep Mieru cases serial. The upstream session stack can native-fault under
+// this package's high-concurrency/repeated Windows stress, while these tests
+// only need to verify mihomo's inbound/outbound wiring.
 func TestInboundMieru(t *testing.T) {
 	t.Run("TCP_HANDSHAKE_STANDARD", func(t *testing.T) {
 		testInboundMieruTCP(t, "HANDSHAKE_STANDARD")
@@ -193,7 +196,6 @@ func TestInboundMieru(t *testing.T) {
 }
 
 func testInboundMieruTCP(t *testing.T, handshakeMode string) {
-	t.Parallel()
 	// mieru must listen on a specific port, so we first create a socket, get the port, and then inject it via ListenConfigForAPI
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if !assert.NoError(t, err) {
@@ -256,11 +258,10 @@ func testInboundMieruTCP(t *testing.T, handshakeMode string) {
 	}
 	defer out.Close()
 
-	tunnel.DoTest(t, out)
+	tunnel.DoSequentialTest(t, out)
 }
 
 func testInboundMieruUDP(t *testing.T, handshakeMode string) {
-	t.Parallel()
 	// mieru must listen on a specific port, so we first create a socket, get the port, and then inject it via ListenConfigForAPI
 	l, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if !assert.NoError(t, err) {

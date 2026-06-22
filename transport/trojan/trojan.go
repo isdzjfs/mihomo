@@ -23,8 +23,9 @@ var (
 	DefaultALPN          = []string{"h2", "http/1.1"}
 	DefaultWebsocketALPN = []string{"http/1.1"}
 
-	crlf             = []byte{'\r', '\n'}
-	errPacketInvalid = errors.New("packet invalid")
+	crlf              = []byte{'\r', '\n'}
+	errPacketInvalid  = errors.New("packet invalid")
+	errPacketTooLarge = errors.New("trojan UDP payload too large")
 )
 
 type Command = byte
@@ -61,7 +62,14 @@ func writePacket(w io.Writer, socks5Addr, payload []byte) (int, error) {
 	buf.Write(crlf)
 	buf.Write(payload)
 
-	return w.Write(buf.Bytes())
+	n, err := w.Write(buf.Bytes())
+	if err != nil {
+		return 0, err
+	}
+	if n != buf.Len() {
+		return 0, io.ErrShortWrite
+	}
+	return len(payload), nil
 }
 
 func WritePacket(w io.Writer, socks5Addr, payload []byte) (int, error) {
@@ -69,26 +77,7 @@ func WritePacket(w io.Writer, socks5Addr, payload []byte) (int, error) {
 		return writePacket(w, socks5Addr, payload)
 	}
 
-	offset := 0
-	total := len(payload)
-	for {
-		cursor := offset + maxLength
-		if cursor > total {
-			cursor = total
-		}
-
-		n, err := writePacket(w, socks5Addr, payload[offset:cursor])
-		if err != nil {
-			return offset + n, err
-		}
-
-		offset = cursor
-		if offset == total {
-			break
-		}
-	}
-
-	return total, nil
+	return 0, errPacketTooLarge
 }
 
 func ReadPacket(r io.Reader, payload []byte) (net.Addr, int, int, error) {
@@ -110,9 +99,11 @@ func ReadPacket(r io.Reader, payload []byte) (net.Addr, int, int, error) {
 		return nil, 0, 0, errPacketInvalid
 	}
 
-	// read crlf
 	if _, err = io.ReadFull(r, payload[:2]); err != nil {
 		return nil, 0, 0, errors.New("read crlf error")
+	}
+	if payload[0] != '\r' || payload[1] != '\n' {
+		return nil, 0, 0, errPacketInvalid
 	}
 
 	length := len(payload)
@@ -131,12 +122,15 @@ var _ N.EnhancePacketConn = (*PacketConn)(nil)
 
 type PacketConn struct {
 	net.Conn
-	remain int
-	rAddr  net.Addr
-	mux    sync.Mutex
+	remain   int
+	rAddr    net.Addr
+	mux      sync.Mutex
+	writeMux sync.Mutex
 }
 
 func (pc *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
+	pc.writeMux.Lock()
+	defer pc.writeMux.Unlock()
 	return WritePacket(pc, socks5.ParseAddrToSocksAddr(addr), b)
 }
 
@@ -149,7 +143,7 @@ func (pc *PacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 			length = pc.remain
 		}
 
-		n, err := pc.Conn.Read(b[:length])
+		n, err := io.ReadFull(pc.Conn, b[:length])
 		if err != nil {
 			return 0, nil, err
 		}
@@ -203,7 +197,7 @@ func (pc *PacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, er
 		return nil, nil, nil, err
 	}
 	length := int(binary.BigEndian.Uint16(data))
-	if length > maxLength || length > len(data) {
+	if data[2] != '\r' || data[3] != '\n' || length > maxLength || length > len(data) {
 		if put != nil {
 			put()
 		}

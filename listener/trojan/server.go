@@ -205,14 +205,14 @@ func New(config LC.TrojanServer, lc C.InboundListenConfig, tunnel C.Tunnel, addi
 
 func (l *Listener) Close() error {
 	l.closed.Store(true)
-	var retErr error
+	var errs []error
 	for _, lis := range l.listeners {
 		err := lis.Close()
 		if err != nil {
-			retErr = err
+			errs = append(errs, err)
 		}
 	}
-	return retErr
+	return errors.Join(errs...)
 }
 
 func (l *Listener) Config() string {
