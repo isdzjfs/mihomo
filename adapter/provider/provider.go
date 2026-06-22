@@ -18,6 +18,7 @@ import (
 	"github.com/metacubex/mihomo/component/resource"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 
 	"github.com/dlclark/regexp2"
@@ -161,7 +162,10 @@ func (pp *proxySetProvider) Initial() error {
 	}
 	_, err := pp.Fetcher.Initial()
 	if err != nil {
-		return err
+		if pp.VehicleType() != P.HTTP {
+			return err
+		}
+		log.Warnln("[Provider] %s initial HTTP pull error: %s; continue without blocking startup", pp.Name(), err.Error())
 	}
 	if subscriptionInfo := cachefile.Cache().GetSubscriptionInfo(pp.Name()); subscriptionInfo != "" {
 		pp.setSubscriptionInfo(NewSubscriptionInfo(subscriptionInfo))
